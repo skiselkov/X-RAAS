@@ -201,21 +201,22 @@ local RAAS_PROXIMITY_TIME_FACT = 2
 local RADALT_GRD_THRESH = 10
 local RAAS_STARTUP_DELAY = 3			-- seconds
 local RWY_DISPLACED_THR_MARGIN = 10
+local ARPT_RELOAD_INTVAL = 10			-- seconds
+local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
     dr_nw_offset
-local cur_arpt_ref, cur_arpt = nil, nil
+local cur_arpts = {}
 local raas_start_time = nil
+local last_airport_reload = 0
 
 local airport_lines = {}
 local airport_line_index = {}
+local airport_geo_table = {}
 
 local raas_on_rwy_ann = {}
 local raas_apch_rwy_ann = {}
 local on_twy_ann = false
-
-local cur_pos_v = nil
-local cur_vel_v = nil
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -252,10 +253,13 @@ local function isemptytable(t)
 	return next(t) == nil
 end
 
+function geo_table_idx(latlon)
+	return math.floor(latlon)
+end
+
 function table.show(t, name, indent)
 	local cart     -- a container
 	local autoref  -- for self references
-
 
 	local function basicSerialize(o)
 		local so = tostring(o)
@@ -357,7 +361,7 @@ function split(str, sep)
 	return res
 end
 
-local function rel_hdg(hdg1, hdg2)
+function rel_hdg(hdg1, hdg2)
 	if hdg1 > hdg2 then
 		if hdg1 > hdg2 + 180 then
 			return 360 - hdg1 + hdg2
@@ -427,22 +431,22 @@ function vect2_norm(v, right)
 	end
 end
 
-function vect2_rot(v, angle)
+local function vect2_rot(v, angle)
 	local sin_angle = math.sin(math.rad(angle))
 	local cos_angle = math.cos(math.rad(angle))
 	return {v[1] * cos_angle - v[2] * sin_angle,
 	    v[1] * sin_angle + v[2] * cos_angle}
 end
 
-function vect2_neg(v)
+local function vect2_neg(v)
 	return {-v[1], -v[2]}
 end
 
-function hdg2dir(hdg)
+local function hdg2dir(hdg)
 	return {math.sin(math.rad(hdg)), math.cos(math.rad(hdg))}
 end
 
-function dir2hdg(dir)
+local function dir2hdg(dir)
 	if dir[1] >= 0 and dir[2] >= 0 then
 		return math.deg(math.asin(dir[1] / vect2_abs(dir)))
 	elseif dir[1] < 0 and dir[2] >= 0 then
@@ -452,15 +456,15 @@ function dir2hdg(dir)
 	end
 end
 
-function vect2_parallel(a, b)
+local function vect2_parallel(a, b)
 	return (a[2] == 0 and b[2] == 0) or ((a[1] / a[2]) == (b[1] / b[2]))
 end
 
-function vect2_eq(a, b)
+local function vect2_eq(a, b)
 	return a[1] == b[1] and a[2] == b[2]
 end
 
-function vect2vect_isect(a, oa, b, ob, confined)
+local function vect2vect_isect(a, oa, b, ob, confined)
 	if vect2_parallel(a, b) then
 		return nil
 	end
@@ -497,7 +501,7 @@ function vect2vect_isect(a, oa, b, ob, confined)
 	return res
 end
 
-function vect2poly_isect(a, oa, poly)
+local function vect2poly_isect(a, oa, poly)
 	local res = {}
 
 	for i = 0, #poly - 1 do
@@ -513,7 +517,7 @@ function vect2poly_isect(a, oa, poly)
 	return res
 end
 
-function point_in_poly(pt, poly)
+local function point_in_poly(pt, poly)
 	-- Simplest approach is ray casting. Construct a vector from `pt' to
 	-- a point very far away and count how many edges of the bbox polygon
 	-- we hit. If we hit an even number, we're outside, otherwise we're
@@ -523,7 +527,71 @@ function point_in_poly(pt, poly)
 	return (#isects % 2) ~= 0
 end
 
-function sph_xlate_init(displac, rot, inv)
+local function vect3_unit(v)
+	local len = vect3_abs(v)
+	if len == 0 then
+		return nil
+	else
+		return {v[1] / len, v[2] / len, v[3] / len}, len
+	end
+end
+
+local function vect3_add(a, b)
+	return {a[1] + b[1], a[2] + b[2] , a[3] + b[3]}
+end
+
+local function vect3_sub(a, b)
+	return {a[1] - b[1], a[2] - b[2] , a[3] - b[3]}
+end
+
+local function vect3_abs(a)
+	return math.sqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3])
+end
+
+local function vect3_scmul(a, b)
+	return {a[1] * b, a[2] * b, a[3] * b}
+end
+
+local function vect3_dotprod(a, b)
+	return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+end
+
+local function vect2sph_isect(v, o, c, r, confined)
+	local l, d = vect3_unit(v)
+	local o_min_c = vect3_sub(o, c)
+	local l_dot_o_min_c = vect3_dotprod(l, o_min_c)
+	local o_min_c_abs = vect3_abs(o_min_c)
+	local sqrt_tmp = (l_dot_o_min_c * l_dot_o_min_c) -
+	    (o_min_c_abs * o_min_c_abs) + (r * r)
+	local i = {}
+
+	if sqrt_tmp > 0 then
+		-- Two solutions
+		local i_d
+		sqrt_tmp = math.sqrt(sqrt_tmp)
+		i_d = -l_dot_o_min_c - sqrt_tmp
+		if not confined or (i_d >= 0 and i_d <= d) then
+			i[#i + 1] = vect3_add(vect3_scmul(l, i_d), o)
+		end
+		i_d = -l_dot_o_min_c + sqrt_tmp
+		if not confined or (i_d >= 0 and i_d <= d) then
+			i[#i + 1] = vect3_add(vect3_scmul(l, i_d), o)
+		end
+		return i
+	elseif sqrt_tmp == 0 then
+		-- One solution
+		local i_d = -l_dot_o_min_c
+		if not confined or (i_d >= 0 and i_d <= d) then
+			i[#i + 1] = vect3_add(vect3_scmul(l, i_d), o)
+		end
+		return i
+	else
+		-- No solutions
+		return {}
+	end
+end
+
+local function sph_xlate_init(displac, rot, inv)
 	local alpha, bravo, theta
 
 	local xlate = {}
@@ -580,7 +648,7 @@ function sph_xlate_init(displac, rot, inv)
 	return xlate
 end
 
-function sph_xlate_vect(p, xlate)
+local function sph_xlate_vect(p, xlate)
 	local q = matrix_mul(xlate[1], p, 3, 1, 3)
 	local r = {q[2], q[3]}
 	local s = matrix_mul(xlate[2], r, 2, 1, 2)
@@ -589,7 +657,7 @@ function sph_xlate_vect(p, xlate)
 	return q
 end
 
-function sph2ecef(pos)
+local function sph2ecef(pos)
 	local lat_rad = math.rad(pos[1])
 	local lon_rad = math.rad(pos[2])
 	local R0 = EARTH_MSL * math.cos(lat_rad)
@@ -597,16 +665,34 @@ function sph2ecef(pos)
 	    EARTH_MSL * math.sin(lat_rad)}
 end
 
-function ortho_fpp_init(center)
-	return sph_xlate_init(center, 0, false)
+local function ortho_fpp_init(center)
+	local fpp = {}
+
+	fpp[1] = sph_xlate_init(center, 0, false)
+	fpp[2] = sph_xlate_init(center, 0, true)
+
+	return fpp
 end
 
-function sph2fpp(pos, fpp)
-	local pos_v = sph_xlate_vect(sph2ecef(pos), fpp)
+local function sph2fpp(pos, fpp)
+	local pos_v = sph_xlate_vect(sph2ecef(pos), fpp[1])
 	return {pos_v[2], pos_v[3]}
 end
 
-function raas_reset()
+local function fpp2sph(pos, fpp)
+	local v = {-1000000000, pos[1], pos[2]}
+	local o = {1000000000, 0, 0}
+	local i = vect2sph_isect(v, o, {0, 0, 0}, EARTH_MSL, false)
+
+	if n == 0 then
+		return nil
+	end
+	r = sph_xlate_vect(i[1], fpp[2])
+
+	return ecef2sph(r)
+end
+
+local function raas_reset()
 	dr_baro_alt = dataref_table("sim/flightmodel/misc/h_ind")
 	dr_rad_alt = dataref_table("sim/cockpit2/gauges/indicators/" ..
 	    "radio_altimeter_height_ft_pilot")
@@ -619,13 +705,9 @@ function raas_reset()
 	    "tire_z_no_deflection")
 
 	raas_start_time = os.time()
-
-	cur_arpt_ref = nil
-	cur_arpt_rwys = nil
-	cur_arpt_elev = nil
 end
 
-function recip_rwy_id(rwy_id)
+local function recip_rwy_id(rwy_id)
 	local num = tonumber(rwy_id:sub(1, 2))
 	local recip_num = num + 18
 	local recip_suffix = ""
@@ -651,7 +733,7 @@ function recip_rwy_id(rwy_id)
 	return recip
 end
 
-function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
+local function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	local a, b, c, d, len_displ_v
 
 	-- displace the 'a' point from the runway threshold laterally
@@ -677,7 +759,7 @@ function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 end
 
 --[[
-function map_apt_dat(apt_dat_fname, apt_dats)
+local function map_apt_dat(apt_dat_fname, apt_dats)
 	apt_dat_f = io.open(apt_dat_fname)
 	if apt_dat_f == nil then
 		return
@@ -695,7 +777,7 @@ function map_apt_dat(apt_dat_fname, apt_dats)
 	io.close(apt_dat_f)
 end
 
-function map_apt_dats(xpdir)
+local function map_apt_dats(xpdir)
 	local apt_dats = {}
 	local scenery_packs_ini = io.open(xpdir ..
 	    "Custom Scenery/scenery_packs.ini")
@@ -716,7 +798,7 @@ function map_apt_dats(xpdir)
 end
 --]]
 
-function airac_parse_rwy(line, rwys, fpp)
+local function airac_parse_rwy(line, rwys, fpp)
 	if line:find("R,") ~= 1 then
 		return false
 	end
@@ -847,7 +929,7 @@ function airac_parse_rwy(line, rwys, fpp)
 	return true
 end
 
-function airac_get_rwy_info(arpt_id, fpp)
+local function airac_get_rwy_info(arpt_id, fpp)
 	local arpt_line_idx = airport_line_index[arpt_id]
 	if arpt_line_idx == nil then
 		return nil
@@ -862,40 +944,107 @@ function airac_get_rwy_info(arpt_id, fpp)
 	return rwys
 end
 
-function load_airport(arpt_ref)
-	local navtype, lat, lon, elev, freq, hdg, arpt_id, arpt_name =
-	    XPLMGetNavAidInfo(arpt_ref)
+local function load_airport(arpt_id)
 	-- Check to see if this airport is usable for us
 	if airport_line_index[arpt_id] == nil then
 		return nil
 	end
+
+	local arpt_ref = XPLMFindNavAid(nil, arpt_id, nil, nil, nil,
+	    xplm_Nav_Airport)
+	if arpt_ref == nil then
+		return nil
+	end
+	local outType, lat, lon, elev, freq, hdg, arpt_id, outName =
+	    XPLMGetNavAidInfo(arpt_ref)
 	local fpp = ortho_fpp_init({lat, lon})
+	local ecef = sph2ecef({lat, lon})
 	return {
+	    ["arpt_id"] = arpt_id,
 	    ["fpp"] = fpp,
 	    ["rwys"] = airac_get_rwy_info(arpt_id, fpp),
 	    ["icao"] = arpt_id,
 	    ["lat"] = lat,
 	    ["lon"] = lon,
+	    ["ecef"] = ecef,
 	    ["elev"] = elev
 	}
 end
 
-function load_cur_airport(arpt_id)
-	arpt_ref = XPLMFindNavAid(nil, arpt_id, dr_lat[0], dr_lon[0], nil,
-	    xplm_Nav_Airport)
-	if arpt_ref ~= nil and cur_arpt_ref ~= arpt_ref then
-		local new_arpt = load_airport(arpt_ref)
-		if new_arpt == nil then
-			return
+local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
+	local lat_tbl, lon_tbl
+
+	if lat_idx < -80 or lat_idx > 80 then
+		return
+	end
+	if lon_idx <= -180 then
+		lon_idx = lon_idx + 360
+	end
+	if lon_idx >= 180 then
+		lon_idx = lon_idx - 360
+	end
+
+	lat_tbl = airport_geo_table[lat_idx]
+	if lat_tbl == nil then
+		logMsg("lat_tbl(" .. lat_idx .. " = nil")
+		return
+	end
+	lon_tbl = lat_tbl[lon_idx]
+	if lon_tbl == nil then
+		logMsg("lon_tbl(" .. lon_idx .. " = nil")
+		return
+	end
+
+	for arpt_id, coords in pairs(lon_tbl) do
+		local arpt_pos = sph2ecef(coords)
+		if vect3_abs(vect3_sub(pos, arpt_pos)) < ARPT_LOAD_THRESH then
+			logMsg("arpt " .. arpt_id .. " in range")
+			arpt_list[arpt_id] = coords
 		end
-		cur_arpt = new_arpt
-		cur_arpt_ref = arpt_ref
-		raas_on_rwy_ann = {}
-		raas_apch_rwy_ann = {}
 	end
 end
 
-function rwy_lcr_string(str)
+local function find_nearest_airports(reflat, reflon)
+	local pos = sph2ecef({reflat, reflon})
+	local ref_lat_idx = geo_table_idx(reflat)
+	local ref_lon_idx = geo_table_idx(reflon)
+	local arpt_list = {}
+
+	for i = -1, 1 do
+		for j = -1, 1 do
+			local lat_idx = ref_lat_idx + i
+			local lon_idx = ref_lon_idx + j
+
+			find_nearest_airports_idx(pos, lat_idx, lon_idx,
+			    arpt_list)
+		end
+	end
+
+	return arpt_list
+end
+
+local function load_nearest_airports()
+	local now = os.time()
+	if now - last_airport_reload < ARPT_RELOAD_INTVAL then
+		return
+	end
+	last_airport_reload = now
+
+	local new_arpts = find_nearest_airports(dr_lat[0], dr_lon[0])
+
+	for arpt_id, arpt in pairs(cur_arpts) do
+		if new_arpts[arpt_id] == nil then
+			cur_arpts[arpt_id] = nil
+		end
+	end
+	for arpt_id, coords in pairs(new_arpts) do
+		if cur_arpts[arpt_id] == nil then
+			cur_arpts[arpt_id] = load_airport(arpt_id)
+		end
+	end
+end
+
+local function rwy_lcr_string(str)
 	local lcr
 	if #str < 3 then
 		return ""
@@ -911,7 +1060,12 @@ function rwy_lcr_string(str)
 	return ""
 end
 
-function closest_rwy_end(pos, rwy)
+local function acf_vel_vector()
+	return vect2_set_abs(hdg2dir(dr_hdg[0]),
+	    RAAS_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
+end
+
+local function closest_rwy_end(pos, rwy)
 	if vect2_abs(vect2_sub(pos, {rwy["t1x"], rwy["t1y"]})) <
 	    vect2_abs(vect2_sub(pos, {rwy["t2x"], rwy["t2y"]})) then
 		return rwy["rwy_id"]
@@ -920,59 +1074,71 @@ function closest_rwy_end(pos, rwy)
 	end
 end
 
-function rwy_id_to_speak_str(rwy_id)
+local function rwy_id_to_speak_str(rwy_id)
 	return rwy_id:sub(1, 1) .. "." .. " " .. rwy_id:sub(2, 2) .. "." ..
 	    rwy_lcr_string(rwy_id)
 end
 
-function raas_ground_runway_approach(arpt)
-	if arpt["rwys"] == nil then
-		return
-	end
-	for rwy_id, rwy in pairs(arpt["rwys"]) do
-		local prox_bbox = rwy["prox_bbox"]
-		if point_in_poly(cur_pos_v, prox_bbox) or
-		    not isemptytable(vect2poly_isect(cur_vel_v,
-			    cur_pos_v, prox_bbox)) then
-			if raas_apch_rwy_ann[rwy_id] == nil then
-				if dr_gs[0] < SPEED_THRESH then
-					local rwy_name = closest_rwy_end(
-					    cur_pos_v, rwy)
-					XPLMSpeakString("Approaching. " ..
-					    rwy_id_to_speak_str(rwy_name))
-				end
-				raas_apch_rwy_ann[rwy_id] = true
+local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
+    vel_v)
+	local prox_bbox = rwy["prox_bbox"]
+	local arpt_id = arpt["arpt_id"]
+
+	if point_in_poly(pos_v, prox_bbox) or
+	    not isemptytable(vect2poly_isect(vel_v, pos_v, prox_bbox)) then
+		if raas_apch_rwy_ann[arpt_id .. rwy_id] == nil then
+			if dr_gs[0] < SPEED_THRESH then
+				local rwy_name = closest_rwy_end(pos_v, rwy)
+				XPLMSpeakString("Approaching. " ..
+				    rwy_id_to_speak_str(rwy_name))
 			end
-		else
-			raas_apch_rwy_ann[rwy_id] = nil
+			raas_apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
+	else
+		raas_apch_rwy_ann[arpt_id .. rwy_id] = nil
 	end
 end
 
-function rwy_align_check(hdg, rwy_id, rwy_hdg)
+local function raas_ground_runway_approach_arpt(arpt, vel_v)
+	local fpp = arpt["fpp"]
+	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
+
+	for rwy_id, rwy in pairs(arpt["rwys"]) do
+		raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
+		    vel_v)
+	end
+end
+
+local function raas_ground_runway_approach()
+	local lat, lon = dr_lat[0], dr_lon[0]
+	local vel_v = acf_vel_vector()
+
+	for arpt_id, arpt in pairs(cur_arpts) do
+		raas_ground_runway_approach_arpt(arpt, vel_v)
+	end
+end
+
+local function rwy_align_check(hdg, arpt_id, rwy_id, rwy_hdg)
 	if math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH then
-		if raas_on_rwy_ann[rwy_id] == nil then
+		if raas_on_rwy_ann[arpt_id .. rwy_id] == nil then
 			if dr_gs[0] < SPEED_THRESH then
 				XPLMSpeakString("On runway. " ..
 				    rwy_id_to_speak_str(rwy_id))
 			end
-			raas_on_rwy_ann[rwy_id] = true
+			raas_on_rwy_ann[arpt_id .. rwy_id] = true
 		end
 	else
-		raas_on_rwy_ann[rwy_id] = nil
+		raas_on_rwy_ann[arpt_id .. rwy_id] = nil
 	end
 end
 
-function raas_ground_on_runway_aligned(arpt)
+local function raas_ground_on_runway_aligned_arpt(arpt)
 	local on_rwy = false
-
-	if arpt["rwys"] == nil then
-		return
-	end
+	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 
 	for rwy_id, rwy in pairs(arpt["rwys"]) do
 		if raas_apch_rwy_ann[rwy_id] ~= nil and
-		    point_in_poly(cur_pos_v, rwy["bbox"]) then
+		    point_in_poly(pos_v, rwy["bbox"]) then
 			on_rwy = true
 			local hdg = dr_hdg[0]
 			rwy_align_check(hdg, rwy["rwy_id"], rwy["hdg"])
@@ -980,14 +1146,27 @@ function raas_ground_on_runway_aligned(arpt)
 		end
 	end
 
+	return on_rwy
+end
+
+local function raas_ground_on_runway_aligned()
+	local on_rwy = false
+
+	for arpt_id, arpt in pairs(cur_arpts) do
+		if raas_ground_on_runway_aligned_arpt(arpt) then
+			on_rwy = true
+		end
+	end
+
 	-- Taxiway takeoff check
-	if not on_rwy and dr_gs[0] > SPEED_THRESH and
+	if not on_rwy and dr_gs[0] >= SPEED_THRESH and
 	    dr_rad_alt[0] < RADALT_GRD_THRESH then
 		if not on_twy_ann then
 			on_twy_ann = true
 			XPLMSpeakString("Caution! On taxiway! On taxiway!")
 		end
-	else
+	elseif dr_gs[0] < SPEED_THRESH or
+	    dr_rad_alt[0] >= RADALT_GRD_THRESH then
 		on_twy_ann = false
 	end
 end
@@ -999,17 +1178,9 @@ function raas_exec()
 	if os.time() - raas_start_time < RAAS_STARTUP_DELAY then
 		return
 	end
-	-- Locate the closes airport first and load its runway layout
-	load_cur_airport(nil)
 
-	if cur_arpt == nil then
-		return
-	end
+	load_nearest_airports(nil)
 
-	local fpp = cur_arpt["fpp"]
-	cur_pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, fpp)
-	cur_vel_v = vect2_set_abs(hdg2dir(dr_hdg[0]),
-	    RAAS_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
 
 	raas_ground_runway_approach(cur_arpt)
 	raas_ground_on_runway_aligned(cur_arpt)
@@ -1017,17 +1188,17 @@ end
 
 local draw_scale = 0.4
 
-function make_x(coord)
+local function make_x(coord)
 	local offx = 1280
 	return coord * draw_scale + offx
 end
 
-function make_y(coord)
+local function make_y(coord)
 	local offy = 768
 	return coord * draw_scale + offy
 end
 
-function draw_bbox(bbox)
+local function draw_bbox(bbox)
 	local graphics = require 'graphics'
 	for i = 0, 3 do
 		graphics.draw_line(
@@ -1040,10 +1211,26 @@ end
 
 function raas_dbg_draw()
 	local graphics = require 'graphics'
+	local nearest_arpt_id = nil
+	local nearest_arpt_dist = 1000000
 
-	if cur_arpt == nil or cur_arpt["rwys"] == nil then
+	-- locate the nearest airport to us
+	local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
+	for arpt_id, arpt in pairs(cur_arpts) do
+		local dist = vect3_abs(vect3_sub(arpt["ecef"], pos_ecef))
+		if dist < nearest_arpt_dist then
+			nearest_arpt_dist = dist
+			nearest_arpt_id = arpt_id
+		end
+	end
+
+	if nearest_arpt == nil then
 		return
 	end
+
+	local cur_arpt = cur_arpts[arpt_id]
+	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, cur_arpt["fpp"])
+	local vel_v = acf_vel_vector()
 
 	graphics.set_color(1, 0, 0, 1)
 	graphics.draw_line(make_x(-5), make_y(0), make_x(5), make_y(0))
@@ -1055,20 +1242,15 @@ function raas_dbg_draw()
 		draw_bbox(rwy["bbox"])
 		draw_bbox(rwy["prox_bbox"])
 	end
-	if cur_pos_v ~= nil and cur_vel_v ~= nil then
-		graphics.set_color(1, 1, 1, 1)
-		local tgt = vect2_add(cur_pos_v, cur_vel_v)
-		graphics.draw_line(make_x(cur_pos_v[1]) - 5,
-		    make_y(cur_pos_v[2]),
-		    make_x(cur_pos_v[1]) + 5,
-		    make_y(cur_pos_v[2]))
-		graphics.draw_line(make_x(cur_pos_v[1]),
-		    make_y(cur_pos_v[2]) - 5,
-		    make_x(cur_pos_v[1]),
-		    make_y(cur_pos_v[2]) + 5)
-		graphics.draw_line(make_x(cur_pos_v[1]), make_y(cur_pos_v[2]),
-		    make_x(tgt[1]), make_y(tgt[2]))
-	end
+
+	graphics.set_color(1, 1, 1, 1)
+	local tgt = vect2_add(pos_v, vel_v)
+	graphics.draw_line(make_x(pos_v[1]) - 5, make_y(pos_v[2]),
+	    make_x(pos_v[1]) + 5, make_y(pos_v[2]))
+	graphics.draw_line(make_x(pos_v[1]), make_y(pos_v[2]) - 5,
+	    make_x(pos_v[1]), make_y(pos_v[2]) + 5)
+	graphics.draw_line(make_x(pos_v[1]), make_y(pos_v[2]),
+	    make_x(tgt[1]), make_y(tgt[2]))
 end
 
 raas_reset()
@@ -1078,14 +1260,35 @@ local arpt_f = io.open(SCRIPT_DIRECTORY ..
 if arpt_f ~= nil then
 	local idx = 1
 	local last_arpt_id = nil
+	local last_arpt_lat_idx, last_arpt_lon_idx
 	local rwys_found = false
 	for line in arpt_f:lines() do
 		airport_lines[#airport_lines + 1] = line
 		if line:find("A,") == 1 then
 			local comps = split(line, ",")
+			local lat = tonumber(comps[4])
+			local lon = tonumber(comps[5])
+			local lat_tbl, lon_tbl
+
 			last_arpt_id = comps[2]
+			last_arpt_lat_idx = geo_table_idx(lat)
+			last_arpt_lon_idx = geo_table_idx(lon)
+
 			airport_line_index[last_arpt_id] = idx
 			rwys_found = false
+
+			lat_tbl = airport_geo_table[last_arpt_lat_idx]
+			if lat_tbl == nil then
+				lat_tbl = {}
+				airport_geo_table[last_arpt_lat_idx] = lat_tbl
+			end
+			lon_tbl = lat_tbl[last_arpt_lon_idx]
+			if lon_tbl == nil then
+				lon_tbl = {}
+				lat_tbl[last_arpt_lon_idx] = lon_tbl
+			end
+
+			lon_tbl[last_arpt_id] = {lat, lon}
 		elseif line:find("R,") == 1 then
 			-- We try keep track to check if the airport has any
 			-- runways and is usable for us
@@ -1095,12 +1298,15 @@ if arpt_f ~= nil then
 			-- it, we can't use it.
 			if not rwys_found and last_arpt_id ~= nil then
 				airport_line_index[last_arpt_id] = nil
+				airport_geo_table[last_arpt_lat_idx][
+				    last_arpt_lon_idx][last_arpt_id] = nil
 			end
 		end
 		idx = idx + 1
 	end
 	arpt_f:close()
 	logMsg("scanned " .. #airport_lines .. " Airports.txt lines")
+	logMsg(table.show(airport_geo_table[-28], "airport_geo_table[-28]"))
 	do_often('raas_exec()')
 	do_every_draw('raas_dbg_draw()')
 else
