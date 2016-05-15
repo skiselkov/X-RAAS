@@ -1135,14 +1135,16 @@ end
 local function raas_ground_on_runway_aligned_arpt(arpt)
 	local on_rwy = false
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
+	local arpt_id = arpt["arpt_id"]
 
 	for rwy_id, rwy in pairs(arpt["rwys"]) do
-		if raas_apch_rwy_ann[rwy_id] ~= nil and
+		if raas_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
 		    point_in_poly(pos_v, rwy["bbox"]) then
 			on_rwy = true
 			local hdg = dr_hdg[0]
-			rwy_align_check(hdg, rwy["rwy_id"], rwy["hdg"])
-			rwy_align_check(hdg, rwy["recip_id"], rwy["recip_hdg"])
+			rwy_align_check(hdg, arpt_id, rwy["rwy_id"], rwy["hdg"])
+			rwy_align_check(hdg, arpt_id, rwy["recip_id"],
+			    rwy["recip_hdg"])
 		end
 	end
 
@@ -1181,9 +1183,8 @@ function raas_exec()
 
 	load_nearest_airports(nil)
 
-
-	raas_ground_runway_approach(cur_arpt)
-	raas_ground_on_runway_aligned(cur_arpt)
+	raas_ground_runway_approach()
+	raas_ground_on_runway_aligned()
 end
 
 local draw_scale = 0.4
@@ -1212,7 +1213,7 @@ end
 function raas_dbg_draw()
 	local graphics = require 'graphics'
 	local nearest_arpt_id = nil
-	local nearest_arpt_dist = 1000000
+	local nearest_arpt_dist = ARPT_LOAD_THRESH
 
 	-- locate the nearest airport to us
 	local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
@@ -1224,11 +1225,11 @@ function raas_dbg_draw()
 		end
 	end
 
-	if nearest_arpt == nil then
+	if nearest_arpt_id == nil then
 		return
 	end
 
-	local cur_arpt = cur_arpts[arpt_id]
+	local cur_arpt = cur_arpts[nearest_arpt_id]
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, cur_arpt["fpp"])
 	local vel_v = acf_vel_vector()
 
