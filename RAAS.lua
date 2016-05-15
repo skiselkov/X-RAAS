@@ -203,6 +203,7 @@ local RAAS_STARTUP_DELAY = 3			-- seconds
 local RWY_DISPLACED_THR_MARGIN = 10
 local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
+local MIN_TAKEOFF_DIST = 1000
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
     dr_nw_offset
@@ -210,9 +211,8 @@ local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
 
-local airport_lines = {}
-local airport_line_index = {}
 local airport_geo_table = {}
+local apt_dat = {}
 
 local raas_on_rwy_ann = {}
 local raas_apch_rwy_ann = {}
@@ -737,7 +737,7 @@ local function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	local a, b, c, d, len_displ_v
 
 	-- displace the 'a' point from the runway threshold laterally
-	-- by 1.5x to the right
+	-- by 1/2 width to the right
 	a = vect2_add(thresh_v, vect2_set_abs(vect2_norm(dir_v,
 	    true), width / 2))
 	-- pull it back by `long_displ'
@@ -758,126 +758,204 @@ local function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	return {a, b, c, d}
 end
 
---[[
 local function map_apt_dat(apt_dat_fname, apt_dats)
 	apt_dat_f = io.open(apt_dat_fname)
 	if apt_dat_f == nil then
-		return
+		return 0
 	end
 
-	local apt = {}
+	local arpt_cnt = 0
+	local apt = nil
+	local icao = nil
 
-	for line in arpt_f:lines() do
+	while true do
+		local line = apt_dat_f:read()
+		if line == nil then
+			break
+		end
 		if line:find("1 ") == 1 then
 			local comps = split(line, " ")
-			local icao = comps[5]
+			local new_icao = comps[5]
+
+			if icao ~= nil and isemptytable(apt["rwys"]) then
+				-- if the previous airport contained
+				-- no runways, discard it
+				apt_dat[icao] = nil
+				arpt_cnt = arpt_cnt - 1
+			end
+
+			icao = nil
+			apt = nil
+
+			if apt_dat[new_icao] == nil then
+				arpt_cnt = arpt_cnt + 1
+				apt = {
+				    ["elev"] = tonumber(comps[2]),
+				    ["rwys"] = {}
+				}
+				icao = new_icao
+				apt_dat[icao] = apt
+			end
+		elseif line:find("100 ") == 1 and icao ~= nil then
+			local comps = split(line, " ")
+			local width = comps[2]
+			local id1 = comps[8 + 1]
+			local lat1 = comps[8 + 2]
+			local lon1 = comps[8 + 3]
+			local displ1 = comps[8 + 4]
+			local blast1 = comps[8 + 5]
+			local id2 = comps[8 + 9 + 1]
+			local lat2 = comps[8 + 9 + 2]
+			local lon2 = comps[8 + 9 + 3]
+			local displ2 = comps[8 + 9 + 4]
+			local blast2 = comps[8 + 9 + 5]
+			local rwys = apt["rwys"]
+
+			rwys[#rwys + 1] = {
+				width,
+				id1, lat1, lon1, displ1, blast1,
+				id2, lat2, lon2, displ2, blast2
+			}
 		end
 	end
 
 	io.close(apt_dat_f)
+
+	return arpt_cnt
 end
 
-local function map_apt_dats(xpdir)
+local function find_all_apt_dats(xpdir)
 	local apt_dats = {}
+
 	local scenery_packs_ini = io.open(xpdir ..
 	    "Custom Scenery/scenery_packs.ini")
 
 	if scenery_packs_ini ~= nil then
-		for line in arpt_f:lines() do
+		for line in scenery_packs_ini:lines() do
 			if line:find("SCENERY_PACK ") == 1 then
 				local scn_name = line:sub(13)
-				map_apt_dat(xpdir .. scn_name ..
-				    "/Earth nav data/apt.dat")
+				apt_dats[#apt_dats + 1] = xpdir .. scn_name ..
+				    "/Earth nav data/apt.dat"
 			end
 		end
 		io.close(scenery_packs_ini)
 	end
 
-	map_apt_dat(xpdir .. "Resources/default scenery/default apt dat/" ..
-	    "Earth nav data/apt.dat", apt_dats)
+	apt_dats[#apt_dats + 1] = xpdir .. "Resources/default scenery/" ..
+	    "default apt dat/Earth nav data/apt.dat", apt_dats
+
+	return apt_dats
 end
---]]
 
-local function airac_parse_rwy(line, rwys, fpp)
-	if line:find("R,") ~= 1 then
-		return false
+local function get_mtime(files)
+	local mtimes = {}
+	local cmd = "python '" .. SCRIPT_DIRECTORY .. "mtime.py' "
+
+	for i, file in pairs(files) do
+		cmd = cmd .. "'" .. file .. "'"
+	end
+	local cmd_f = io.popen(cmd)
+	if cmd_f == nil then
+		return nil
+	end
+	while true do
+		local line = cmd_f:read()
+		if line == nil then
+			break
+		end
+		mtimes[#mtimes + 1] = tonumber(line)
+	end
+	cmd_f:close()
+
+	return mtimes
+end
+
+local function map_apt_dats(xpdir)
+	local apt_dats = find_all_apt_dats(xpdir)
+	local cache_outdated = false
+	local apt_dat_list_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.list")
+
+	if apt_dat_list_f ~= nil then
+		local entries_in_cache = 0
+		for line in apt_dat_list_f:lines() do
+			entries_in_cache = entries_in_cache + 1
+			if line ~= apt_dats[entries_in_cache] then
+				cache_outdated = true
+				break
+			end
+		end
+		if entries_in_cache ~= #apt_dats then
+			cache_outdated = true
+		end
+		apt_dat_list_f:close()
+	else
+		cache_outdated = true
 	end
 
-	local comps = split(line, ",")
-	local rwy_id = comps[2]
-
-	local hdg = tonumber(comps[3]) - dr_magvar[0]
-	local recip_hdg = hdg + 180
-	local len = ft2m(tonumber(comps[4]))
-	local width = ft2m(tonumber(comps[5]))
-	local lat = tonumber(comps[9])
-	local lon = tonumber(comps[10])
-	local thresh_v = sph2fpp({lat, lon}, fpp)
-	local dir_v = hdg2dir(hdg)
-	local far_thresh_v = vect2_add(thresh_v, vect2_set_abs(dir_v, len))
-	local elev = tonumber(comps[11])
-	local gpa = tonumber(comps[12])
-
-	if recip_hdg > 360 then
-		recip_hdg = recip_hdg - 360
+	-- update the apt_dat.list file
+	if cache_outdated then
+		apt_dat_list_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.list",
+		    "w")
+		for i, line in pairs(apt_dats) do
+			apt_dat_list_f:write(line .. "\n")
+		end
+		apt_dat_list_f:close()
 	end
 
-	local recip_id = recip_rwy_id(rwy_id)
-	local rwy = rwys[recip_id]
+	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.cache")
+	if apt_dat_cache_f ~= nil then
+		apt_dat_cache_f:close()
 
-	if rwy ~= nil then
-		-- We'll recalculate the runway's heading and second threshold
-		-- position because often times the magnetic variation data is
-		-- woefully inaccurate
-		local far_thresh_v = thresh_v
+		local apt_dat_cache_mtime = next(get_mtime({SCRIPT_DIRECTORY ..
+		    "apt_dat.cache"}))
+		local apt_dat_mtimes = get_mtime(apt_dats)
 
-		thresh_v = {rwy["t1x"], rwy["t1y"]}
-		dir_v = vect2_sub(far_thresh_v, thresh_v)
-		len = vect2_abs(dir_v)
+		for i, mtime in pairs(apt_dat_mtimes) do
+			if apt_dat_cache_mtime < mtime then
+				cache_outdated = true
+				break
+			end
+		end 
+	else
+		cache_outdated = true
+	end
 
-		-- Sometimes runways have displaced thresholds, which would
-		-- be indicated by the decoded runway length being longer than
-		-- the one measured between the actual threshold points. We
-		-- can't exactly determine which of the two endpoints has the
-		-- displacement, so we simply add it to both ends and hope
-		-- for the best.
-		local len_delta = rwy["len"] - len
-		if len_delta > RWY_DISPLACED_THR_MARGIN then
-			thresh_v = vect2_add(thresh_v,
-			    vect2_set_abs(vect2_neg(dir_v), len_delta))
-			far_thresh_v = vect2_add(far_thresh_v,
-			    vect2_set_abs(dir_v, len_delta))
-			dir_v = vect2_sub(far_thresh_v, thresh_v)
-			len = vect2_abs(dir_v)
+	if not cache_outdated then
+		map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache", apt_dat)
+	else
+		for i, apt_dat_fname in pairs(apt_dats) do
+			map_apt_dat(apt_dat_fname, apt_dat)
 		end
 
-		rwy["t1x"] = thresh_v[1]
-		rwy["t1y"] = thresh_v[2]
-		rwy["t2x"] = far_thresh_v[1]
-		rwy["t2y"] = far_thresh_v[2]
-
-		hdg = dir2hdg(dir_v)
-		recip_hdg = hdg + 180
-		if recip_hdg > 360 then
-			recip_hdg = recip_hdg - 360
+		apt_dat_cache_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.cache",
+		    "w")
+		for icao, arpt in pairs(apt_dat) do
+			local rwys = arpt["rwys"]
+			apt_dat_cache_f:write("1 " .. arpt["elev"] ..
+			    " 0 0 " .. icao .. "\n")
+			for i, rwy in pairs(rwys) do
+				apt_dat_cache_f:write("100 " .. rwy[1] ..
+				    " 0 0 0 0 0 0 " ..
+				    rwy[2] .. " " ..
+				    rwy[3] .. " " ..
+				    rwy[4] .. " " ..
+				    rwy[5] .. " " ..
+				    rwy[6] .. " 0 0 0 0 " ..
+				    rwy[7] .. " " ..
+				    rwy[8] .. " " ..
+				    rwy[9] .. " " ..
+				    rwy[10] .. " " ..
+				    rwy[11] .. "\n")
+			end
 		end
-		rwy["hdg"] = hdg
-		rwy["recip_hdg"] = recip_hdg
-		rwy["far_gpa"] = gpa
-		rwy["far_elev"] = elev
-		rwy["far_lat"] = lat
-		rwy["far_lon"] = lon
-
-		-- Recalculate the bounding boxes
-		local prox_bbox = make_rwy_bbox(thresh_v, dir_v,
-		    RAAS_PROXIMITY_LAT_FRACT * width, len +
-		    RAAS_PROXIMITY_LON_DISPL, RAAS_PROXIMITY_LON_DISPL)
-		local bbox = make_rwy_bbox(thresh_v, dir_v, width, len, 0)
-		rwy["bbox"] = bbox
-		rwy["prox_bbox"] = prox_bbox
-
-		return true
+		apt_dat_cache_f:close()
 	end
+end
+
+local function load_rwy_info(arpt_id, fpp)
+	local rwys = {}
+	local db_arpt = apt_dat[arpt_id]
+	local db_rwys = db_arpt["rwys"]
 
 	--[[
 	 RAAS runway proximity entry bounding box is defined as:
@@ -898,77 +976,72 @@ local function airac_parse_rwy(line, rwys, fpp)
 	        ---- a +-------------------------------------------------+ b
 	--]]
 
-	local a, b, c, d, len_displ_v
+	for i, db_rwy in pairs(db_rwys) do
+		local width = db_rwy[1]
 
-	local prox_bbox = make_rwy_bbox(thresh_v, dir_v,
-	    RAAS_PROXIMITY_LAT_FRACT * width, len + RAAS_PROXIMITY_LON_DISPL,
-	    RAAS_PROXIMITY_LON_DISPL)
+		local id1 = db_rwy[2]
+		local lat1 = db_rwy[3]
+		local lon1 = db_rwy[4]
+		local thr1_v = sph2fpp({lat1, lon1}, fpp)
+		local displ1 = db_rwy[5]
+		local blast1 = db_rwy[6]
 
-	-- Now do the same for just the runway itself. This is used for the
-	-- "on runway xyz" announcement.
-	local bbox = make_rwy_bbox(thresh_v, dir_v, width, len, 0)
+		local id2 = db_rwy[7]
+		local lat2 = db_rwy[8]
+		local lon2 = db_rwy[9]
+		local thr2_v = sph2fpp({lat2, lon2}, fpp)
+		local displ2 = db_rwy[10]
+		local blast2 = db_rwy[11]
 
-	rwys[rwy_id] = {
-	    ["rwy_id"] = rwy_id,
-	    ["recip_id"] = recip_id,
-	    ["hdg"] = hdg,
-	    ["recip_hdg"] = recip_hdg,
-	    ["len"] = len,
-	    ["width"] = width,
-	    ["lat"] = lat,
-	    ["lon"] = lon,
-	    ["t1x"] = thresh_v[1],
-	    ["t1y"] = thresh_v[2],
-	    ["t2x"] = far_thresh_v[1],
-	    ["t2y"] = far_thresh_v[2],
-	    ["elev"] = elev,
-	    ["gpa"] = gpa,
-	    ["bbox"] = bbox,
-	    ["prox_bbox"] = prox_bbox
-	}
-	return true
-end
+		local dir_v = vect2_sub(thr2_v, thr1_v)
+		local hdg1 = dir2hdg(dir_v)
+		local hdg2 = dir2hdg(vect2_neg(dir_v))
 
-local function airac_get_rwy_info(arpt_id, fpp)
-	local arpt_line_idx = airport_line_index[arpt_id]
-	if arpt_line_idx == nil then
-		return nil
+		local rwy = {
+		    ["id1"] = id1,
+		    ["id2"] = id2,
+		    ["t1x"] = thr1_v[1],
+		    ["t1y"] = thr1_v[2],
+		    ["t2x"] = thr2_v[1],
+		    ["t2y"] = thr2_v[2],
+		    ["hdg1"] = hdg1,
+		    ["hdg2"] = hdg2,
+		}
+
+		local len = vect2_abs(dir_v)
+		local prox_bbox = make_rwy_bbox(thr1_v, dir_v,
+		    RAAS_PROXIMITY_LAT_FRACT * width,
+		    len + RAAS_PROXIMITY_LON_DISPL, RAAS_PROXIMITY_LON_DISPL)
+		local tora_bbox = make_rwy_bbox(thr1_v, dir_v, width, len, 0)
+		local asda_bbox = make_rwy_bbox(thr1_v, dir_v, width,
+		    len + blast2, blast1)
+
+		rwy["tora_bbox"] = tora_bbox
+		rwy["asda_bbox"] = asda_bbox
+		rwy["prox_bbox"] = prox_bbox
+
+		rwys[#rwys + 1] = rwy
 	end
-	rwys = {}
-	for i = arpt_line_idx + 1, #airport_lines do
-		local line = airport_lines[i]
-		if not airac_parse_rwy(line, rwys, fpp) then
-			break
-		end
-	end
+
 	return rwys
 end
 
 local function load_airport(arpt_id)
-	-- Check to see if this airport is usable for us
-	if airport_line_index[arpt_id] == nil then
-		return nil
-	end
-
-	local arpt_ref = XPLMFindNavAid(nil, arpt_id, nil, nil, nil,
-	    xplm_Nav_Airport)
-	if arpt_ref == nil then
-		return nil
-	end
-	local outType, lat, lon, elev, freq, hdg, arpt_id, outName =
-	    XPLMGetNavAidInfo(arpt_ref)
+	local db_arpt = apt_dat[arpt_id]
+	local lat = db_arpt["lat"]
+	local lon = db_arpt["lon"]
 	local fpp = ortho_fpp_init({lat, lon})
 	local ecef = sph2ecef({lat, lon})
-	return {
+	local arpt = {
 	    ["arpt_id"] = arpt_id,
 	    ["fpp"] = fpp,
-	    ["rwys"] = airac_get_rwy_info(arpt_id, fpp),
-	    ["icao"] = arpt_id,
+	    ["rwys"] = load_rwy_info(arpt_id, fpp),
 	    ["lat"] = lat,
 	    ["lon"] = lon,
 	    ["ecef"] = ecef,
-	    ["elev"] = elev
+	    ["elev"] = db_arpt["elev"]
 	}
+	return arpt
 end
 
 local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
@@ -986,12 +1059,10 @@ local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
 
 	lat_tbl = airport_geo_table[lat_idx]
 	if lat_tbl == nil then
-		logMsg("lat_tbl(" .. lat_idx .. " = nil")
 		return
 	end
 	lon_tbl = lat_tbl[lon_idx]
 	if lon_tbl == nil then
-		logMsg("lon_tbl(" .. lon_idx .. " = nil")
 		return
 	end
 
@@ -1068,15 +1139,44 @@ end
 local function closest_rwy_end(pos, rwy)
 	if vect2_abs(vect2_sub(pos, {rwy["t1x"], rwy["t1y"]})) <
 	    vect2_abs(vect2_sub(pos, {rwy["t2x"], rwy["t2y"]})) then
-		return rwy["rwy_id"]
+		return rwy["id1"]
 	else
-		return rwy["recip_id"]
+		return rwy["id2"]
 	end
 end
 
 local function rwy_id_to_speak_str(rwy_id)
 	return rwy_id:sub(1, 1) .. "." .. " " .. rwy_id:sub(2, 2) .. "." ..
 	    rwy_lcr_string(rwy_id)
+end
+
+local function dist_to_speak_str(dist)
+	local use_feet = true
+
+	if use_feet then
+		local dist_ft = dist * 3.281
+		if dist_ft >= 1000 then
+			return tostring(math.floor(dist_ft / 1000)) ..
+			    ". Thousand."
+		elseif dist_ft >= 500 then
+			return "Five. Hundred."
+		elseif dist_ft >= 100 then
+			return "One. Hundred."
+		else
+			return nil
+		end
+	else
+		local dist_3s = math.floor(dist / 300)
+		if dist_3s >= 1 then
+			return (dist_3s * 3) ..". Hundred."
+		elseif dist >= 100 then
+			return "One. Hundred."
+		elseif dist >= 30 then
+			return "Thirty."
+		else
+			return nil
+		end
+	end
 end
 
 local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
@@ -1103,7 +1203,8 @@ local function raas_ground_runway_approach_arpt(arpt, vel_v)
 	local fpp = arpt["fpp"]
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 
-	for rwy_id, rwy in pairs(arpt["rwys"]) do
+	for i, rwy in pairs(arpt["rwys"]) do
+		local rwy_id = rwy["id1"]
 		raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 		    vel_v)
 	end
@@ -1118,12 +1219,23 @@ local function raas_ground_runway_approach()
 	end
 end
 
-local function rwy_align_check(hdg, arpt_id, rwy_id, rwy_hdg)
+local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	if math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH then
 		if raas_on_rwy_ann[arpt_id .. rwy_id] == nil then
 			if dr_gs[0] < SPEED_THRESH then
-				XPLMSpeakString("On runway. " ..
-				    rwy_id_to_speak_str(rwy_id))
+				local msg = "On runway. " ..
+				    rwy_id_to_speak_str(rwy_id)
+				local dist = vect2_abs(vect2_sub(opp_thr_v,
+				    pos_v))
+				local dist_to_speak = dist_to_speak_str(dist)
+				logMsg("dist: " .. dist)
+
+				if dist < MIN_TAKEOFF_DIST and
+				    dist_to_speak ~= nil then
+					msg = msg .. " " .. dist_to_speak ..
+					    " Remaining."
+				end
+				XPLMSpeakString(msg)
 			end
 			raas_on_rwy_ann[arpt_id .. rwy_id] = true
 		end
@@ -1137,14 +1249,16 @@ local function raas_ground_on_runway_aligned_arpt(arpt)
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 	local arpt_id = arpt["arpt_id"]
 
-	for rwy_id, rwy in pairs(arpt["rwys"]) do
+	for i, rwy in pairs(arpt["rwys"]) do
+		local rwy_id = rwy["id1"]
 		if raas_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
-		    point_in_poly(pos_v, rwy["bbox"]) then
+		    point_in_poly(pos_v, rwy["tora_bbox"]) then
 			on_rwy = true
 			local hdg = dr_hdg[0]
-			rwy_align_check(hdg, arpt_id, rwy["rwy_id"], rwy["hdg"])
-			rwy_align_check(hdg, arpt_id, rwy["recip_id"],
-			    rwy["recip_hdg"])
+			on_rwy_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
+			    pos_v, {rwy["t2x"], rwy["t2y"]})
+			on_rwy_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
+			    pos_v, {rwy["t1x"], rwy["t1y"]})
 		end
 	end
 
@@ -1240,7 +1354,8 @@ function raas_dbg_draw()
 	graphics.set_color(0.6, 0.6, 0.6, 1)
 
 	for rwy_id, rwy in pairs(cur_arpt["rwys"]) do
-		draw_bbox(rwy["bbox"])
+		draw_bbox(rwy["tora_bbox"])
+		draw_bbox(rwy["asda_bbox"])
 		draw_bbox(rwy["prox_bbox"])
 	end
 
@@ -1256,60 +1371,35 @@ end
 
 raas_reset()
 
-local arpt_f = io.open(SCRIPT_DIRECTORY ..
-    "../../../../Custom Data/GNS430/navdata/Airports.txt")
-if arpt_f ~= nil then
-	local idx = 1
-	local last_arpt_id = nil
-	local last_arpt_lat_idx, last_arpt_lon_idx
-	local rwys_found = false
-	for line in arpt_f:lines() do
-		airport_lines[#airport_lines + 1] = line
-		if line:find("A,") == 1 then
-			local comps = split(line, ",")
-			local lat = tonumber(comps[4])
-			local lon = tonumber(comps[5])
-			local lat_tbl, lon_tbl
+map_apt_dats(SCRIPT_DIRECTORY .. "../../../../")
 
-			last_arpt_id = comps[2]
-			last_arpt_lat_idx = geo_table_idx(lat)
-			last_arpt_lon_idx = geo_table_idx(lon)
+local nav_ref = XPLMGetFirstNavAid()
+while nav_ref ~= XPLM_NAV_NOT_FOUND do
+	local outType, lat, lon, elev, freq, hdg, arpt_id, outName =
+	    XPLMGetNavAidInfo(nav_ref)
+	if outType == xplm_Nav_Airport and apt_dat[arpt_id] ~= nil then
+		local arpt = apt_dat[arpt_id]
+		arpt["lat"] = lat
+		arpt["lon"] = lon
 
-			airport_line_index[last_arpt_id] = idx
-			rwys_found = false
+		local lat_idx = geo_table_idx(lat)
+		local lon_idx = geo_table_idx(lon)
 
-			lat_tbl = airport_geo_table[last_arpt_lat_idx]
-			if lat_tbl == nil then
-				lat_tbl = {}
-				airport_geo_table[last_arpt_lat_idx] = lat_tbl
-			end
-			lon_tbl = lat_tbl[last_arpt_lon_idx]
-			if lon_tbl == nil then
-				lon_tbl = {}
-				lat_tbl[last_arpt_lon_idx] = lon_tbl
-			end
-
-			lon_tbl[last_arpt_id] = {lat, lon}
-		elseif line:find("R,") == 1 then
-			-- We try keep track to check if the airport has any
-			-- runways and is usable for us
-			rwys_found = true
-		else
-			-- If no runways were found on this airport, expunge
-			-- it, we can't use it.
-			if not rwys_found and last_arpt_id ~= nil then
-				airport_line_index[last_arpt_id] = nil
-				airport_geo_table[last_arpt_lat_idx][
-				    last_arpt_lon_idx][last_arpt_id] = nil
-			end
+		local lat_tbl = airport_geo_table[lat_idx]
+		if lat_tbl == nil then
+			lat_tbl = {}
+			airport_geo_table[lat_idx] = lat_tbl
 		end
-		idx = idx + 1
+		local lon_tbl = lat_tbl[lon_idx]
+		if lon_tbl == nil then
+			lon_tbl = {}
+			lat_tbl[lon_idx] = lon_tbl
+		end
+
+		lon_tbl[arpt_id] = {lat, lon}
 	end
-	arpt_f:close()
-	logMsg("scanned " .. #airport_lines .. " Airports.txt lines")
-	logMsg(table.show(airport_geo_table[-28], "airport_geo_table[-28]"))
-	do_often('raas_exec()')
-	do_every_draw('raas_dbg_draw()')
-else
-	logMsg("Airports.txt not found - make sure you have navdata installed")
+	nav_ref = XPLMGetNextNavAid(nav_ref)
 end
+
+do_often('raas_exec()')
+do_every_draw('raas_dbg_draw()')
