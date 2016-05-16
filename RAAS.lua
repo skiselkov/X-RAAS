@@ -1871,17 +1871,21 @@ function raas_snd_sched()
 	end
 end
 
-local function load_acf_config()
-	local acf_cfg_f = io.open(AIRCRAFT_PATH .. "RAAS.cfg")
-
-	if acf_cfg_f ~= nil then
+local function load_config(cfgname)
+	local cfg_f = io.open(cfgname)
+	if cfg_f ~= nil then
 		local cfg = acf_cfg_f:read("*all")
 		lua.execute(cfg)
-		acf_cfg_f:close()
+		cfg_f:close()
 	end
 end
 
-load_acf_config()
+local function load_configs()
+	load_config(SCRIPT_DIRECTORY .. "../../../../X-RAAS.cfg")
+	load_config(AIRCRAFT_PATH .. "X-RAAS.cfg")
+end
+
+load_configs()
 
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
