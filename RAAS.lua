@@ -946,10 +946,54 @@ local function get_mtime(files)
 	return mtimes
 end
 
+local function recreate_apt_dat_cache(xpdir, apt_dats)
+	for i, apt_dat_fname in pairs(apt_dats) do
+		map_apt_dat(apt_dat_fname, apt_dat)
+	end
+
+	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.cache",
+	    "w")
+	for icao, arpt in pairs(apt_dat) do
+		local rwys = arpt["rwys"]
+		apt_dat_cache_f:write("1 " .. arpt["elev"] ..
+		    " 0 0 " .. icao .. "\n")
+		for i, rwy in pairs(rwys) do
+			apt_dat_cache_f:write("100 " .. rwy[1] ..
+			    " 0 0 0 0 0 0 " ..
+			    rwy[2] .. " " ..
+			    rwy[3] .. " " ..
+			    rwy[4] .. " " ..
+			    rwy[5] .. " " ..
+			    rwy[6] .. " 0 0 0 0 " ..
+			    rwy[7] .. " " ..
+			    rwy[8] .. " " ..
+			    rwy[9] .. " " ..
+			    rwy[10] .. " " ..
+			    rwy[11] .. "\n")
+		end
+	end
+	apt_dat_cache_f:close()
+end
+
+local function is_on_windows()
+	return package.config:sub(1,1) == '\\'
+end
+
 local function map_apt_dats(xpdir)
 	local apt_dats = find_all_apt_dats(xpdir)
 	local cache_outdated = false
 	local apt_dat_list_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.list")
+
+	if is_on_windows() then
+		logMsg("on windows")
+		if not map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
+		    apt_dat) == 0 then
+			recreate_apt_dat_cache(xpdir)
+		end
+		return
+	else
+		logMsg("not on windows")
+	end
 
 	if apt_dat_list_f ~= nil then
 		local entries_in_cache = 0
@@ -996,35 +1040,9 @@ local function map_apt_dats(xpdir)
 		cache_outdated = true
 	end
 
-	if not cache_outdated then
-		map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache", apt_dat)
-	else
-		for i, apt_dat_fname in pairs(apt_dats) do
-			map_apt_dat(apt_dat_fname, apt_dat)
-		end
-
-		apt_dat_cache_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.cache",
-		    "w")
-		for icao, arpt in pairs(apt_dat) do
-			local rwys = arpt["rwys"]
-			apt_dat_cache_f:write("1 " .. arpt["elev"] ..
-			    " 0 0 " .. icao .. "\n")
-			for i, rwy in pairs(rwys) do
-				apt_dat_cache_f:write("100 " .. rwy[1] ..
-				    " 0 0 0 0 0 0 " ..
-				    rwy[2] .. " " ..
-				    rwy[3] .. " " ..
-				    rwy[4] .. " " ..
-				    rwy[5] .. " " ..
-				    rwy[6] .. " 0 0 0 0 " ..
-				    rwy[7] .. " " ..
-				    rwy[8] .. " " ..
-				    rwy[9] .. " " ..
-				    rwy[10] .. " " ..
-				    rwy[11] .. "\n")
-			end
-		end
-		apt_dat_cache_f:close()
+	if cache_outdated or map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
+	    apt_dat) == 0 then
+		recreate_apt_dat_cache(xpdir)
 	end
 end
 
