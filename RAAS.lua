@@ -194,6 +194,7 @@ RAAS advisories:
 
 local HDG_ALIGN_THRESH = 25			-- degrees
 local SPEED_THRESH = 20.5			-- m/s, 40 knots
+local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
 local RAAS_PROXIMITY_LAT_FRACT = 3
 local RAAS_PROXIMITY_LON_DISPL = 305		-- meters, 1000 ft
@@ -207,22 +208,33 @@ local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
 
-local RAAS_APCH_PROXIMITY_LAT_ANGLE = 3.5	-- degrees
+local RAAS_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RAAS_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
+local RAAS_APCH_FLAP1_THRESH = 950		-- feet
+local RAAS_APCH_FLAP2_THRESH = 600		-- feet
 local RAAS_APCH_ALT_THRESH = 470		-- feet
 local RAAS_APCH_ALT_WINDOW = 270		-- feet
 
--- config stuff (can be overridden by acf)
-local use_imperial = false
+-- config stuff (to be overridden by acf)
+local use_imperial = true
 local min_takeoff_dist = 1000			-- meters
-local accel_stop_dist_cutoff = 4000		-- meters
+local min_landing_dist = 900			-- meters
+local accel_stop_dist_cutoff = 3000		-- meters
+local voice_gender = "female"
+local min_landing_flap = 0.5			-- ratio
+local min_takeoff_flap = 0.1			-- ratio
+local max_takeoff_flap = 0.75			-- ratio
+
+local on_rwy_warn_initial = 5			-- seconds
+local on_rwy_warn_repeat = 10			-- seconds
+local on_rwy_warn_max_n = 3
 
 -- precomputed, since it doesn't change
 local RAAS_APCH_PROXIMITY_LAT_DISPL = RAAS_APCH_PROXIMITY_LON_DISPL *
     math.tan(math.rad(RAAS_APCH_PROXIMITY_LAT_ANGLE))
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
-    dr_nw_offset
+    dr_nw_offset, dr_flaprqst
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -235,8 +247,13 @@ local dbg_enabled = false
 local raas_on_rwy_ann = {}
 local raas_apch_rwy_ann = {}
 local raas_air_apch_rwy_ann = {}
+local raas_air_apch_flap1_ann = {}
+local raas_air_apch_flap2_ann = {}
 local on_twy_ann = false
 local long_landing_ann = false
+local short_rwy_takeoff_chk = false
+local on_rwy_timer = -1
+local on_rwy_warnings = 0
 
 local raas_accel_stop_max_spd = {}
 local raas_accel_stop_ann_initial = 0
@@ -246,8 +263,6 @@ local raas_accel_stop_distances = {
 	-- remaining. The ranges are configured so as to allow for a healthy
 	-- maximum speed margin over anything that could be reasonably attained
 	-- over that portion of the runway.
-	{["max"] = 3474, ["min"] = 3353},	-- 11400-11000 ft, maxspd 235 KT
-	{["max"] = 3169, ["min"] = 3048},	-- 10400-10000 ft, maxspd 235 KT
 	{["max"] = 2864, ["min"] = 2743},	-- 9400-9000 ft, maxspd 235 KT
 	{["max"] = 2560, ["min"] = 2439},	-- 8400-8000 ft, maxspd 235 KT
 	{["max"] = 2255, ["min"] = 2134},	-- 7400-7000 ft, maxspd 235 KT
@@ -262,6 +277,17 @@ local raas_accel_stop_distances = {
 }
 local airborne = false
 local departed = false
+
+local messages = {
+	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
+	["5"] = {}, ["6"] = {}, ["7"] = {}, ["8"] = {}, ["9"] = {},
+	["alt_set"] = {}, ["apch"] = {}, ["caution"] = {}, ["flaps"] = {},
+	["hundred"] = {}, ["left"] = {}, ["long_land"] = {}, ["on_rwy"] = {},
+	["on_twy"] = {}, ["right"] = {}, ["rmng"] = {}, ["short_rwy"] = {},
+	["thousand"] = {}, ["too_fast"] = {}, ["too_high"] = {}, ["twy"] = {},
+	["unstable"] = {}
+}
+local cur_msg = {}
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -422,8 +448,12 @@ function rel_hdg(hdg1, hdg2)
 	end
 end
 
-function m2ft(m)
+local function m2ft(m)
 	return m * 3.281
+end
+
+local function ft2m(ft)
+	return m / 3.281
 end
 
 function vect2_abs(a)
@@ -748,6 +778,7 @@ local function raas_reset()
 	dr_magvar = dataref_table("sim/flightmodel/position/magnetic_variation")
 	dr_nw_offset = dataref_table("sim/flightmodel/parts/" ..
 	    "tire_z_no_deflection")
+	dr_flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
 
 	raas_start_time = os.time()
 end
@@ -1049,9 +1080,6 @@ local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 				local dist = math.abs(math.sin(math.rad(a)) *
 				    vect2_abs(v))
 
-				logMsg("distance between rwys " .. rwy_id ..
-				    " and " .. orwy[2] .. ": " .. dist ..
-				    " angle: " .. a)
 				if a < 0 then
 					limit_left = math.min(dist / 2,
 					    limit_left)
@@ -1257,22 +1285,6 @@ local function load_nearest_airports()
 	end
 end
 
-local function rwy_lcr_string(str)
-	local lcr
-	if #str < 3 then
-		return ""
-	end
-	lcr = str:sub(3, 3)
-	if lcr == "L" then
-		return " Left."
-	elseif lcr == "R" then
-		return " Right."
-	elseif lcr == "C" then
-		return " Center."
-	end
-	return ""
-end
-
 local function acf_vel_vector()
 	return vect2_set_abs(hdg2dir(dr_hdg[0]),
 	    RAAS_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
@@ -1287,46 +1299,75 @@ local function closest_rwy_end(pos, rwy)
 	end
 end
 
-local function rwy_id_to_speak_str(rwy_id)
-	return rwy_id:sub(1, 1) .. "." .. " " .. rwy_id:sub(2, 2) .. "." ..
-	    rwy_lcr_string(rwy_id)
+local function rwy_lcr_msg(str)
+	local lcr
+	if #str < 3 then
+		return nil
+	end
+	lcr = str:sub(3, 3)
+	if lcr == "L" then
+		return "left"
+	elseif lcr == "R" then
+		return "right"
+	elseif lcr == "C" then
+		return "center"
+	end
+	return nil
 end
 
-local function dist_to_speak_str(dist)
+local function rwy_id_to_msg(rwy_id, msg)
+	msg[#msg + 1] = rwy_id:sub(1, 1)
+	msg[#msg + 1] = rwy_id:sub(2, 2)
+	msg[#msg + 1] = rwy_lcr_msg(rwy_id)
+end
+
+local function dist_to_msg(dist, msg)
 	if use_imperial then
 		local dist_ft = dist * 3.281
 		if dist_ft >= 1000 then
-			return tostring(math.floor(dist_ft / 1000)) ..
-			    ". Thousand."
+			local thousands = math.floor(dist_ft / 1000)
+			if thousands > 9 then
+				-- we don't have a '10' message
+				return false
+			end
+			msg[#msg + 1] = tostring(thousands)
+			msg[#msg + 1] = "thousand"
 		elseif dist_ft >= 500 then
-			return "Five. Hundred."
+			msg[#msg + 1] = "5"
+			msg[#msg + 1] = "hundred"
 		elseif dist_ft >= 100 then
-			return "One. Hundred."
+			msg[#msg + 1] = "1"
+			msg[#msg + 1] = "hundred"
 		else
-			return nil
+			return false
 		end
 	else
 		local dist_300incr = math.floor(dist / 300) * 300
 		local dist_thousands = math.floor(dist_300incr / 1000)
 		local dist_hundreds = dist_300incr % 1000
 		if dist_thousands > 0 and dist_hundreds > 0 then
-			return dist_thousands ..". Thousand. " ..
-			    (dist_hundreds / 100) .. ". Hundred."
+			msg[#msg + 1] = tostring(dist_thousands)
+			msg[#msg + 1] = "thousand"
+			msg[#msg + 1] = tostring(dist_hundreds / 100)
+			msg[#msg + 1] = "hundred"
 		elseif dist_thousands > 0 then
-			return dist_thousands .. ". Thousand."
+			msg[#msg + 1] = tostring(dist_thousands)
+			msg[#msg + 1] = "thousand"
 		elseif dist >= 100 then
 			if dist_hundreds > 0 then
-				return math.floor(dist_hundreds / 100) ..
-				    ". Hundred."
+				msg[#msg + 1] = tostring(math.floor(
+				    dist_hundreds / 100))
+				msg[#msg + 1] = "hundred"
 			else
-				return "One. Hundred."
+				msg[#msg + 1] = "1"
+				msg[#msg + 1] = "hundred"
 			end
-		elseif dist >= 30 then
-			return "Thirty."
 		else
-			return nil
+			return false
 		end
 	end
+
+	return true
 end
 
 local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
@@ -1339,8 +1380,9 @@ local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 		if raas_apch_rwy_ann[arpt_id .. rwy_id] == nil then
 			if dr_gs[0] < SPEED_THRESH then
 				local rwy_name = closest_rwy_end(pos_v, rwy)
-				XPLMSpeakString("Approaching. " ..
-				    rwy_id_to_speak_str(rwy_name))
+				local msg = {"apch"}
+				rwy_id_to_msg(rwy_name, msg)
+				raas_play_msg(msg)
 			end
 			raas_apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
@@ -1369,31 +1411,49 @@ local function raas_ground_runway_approach()
 	end
 end
 
+local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+	local msg = {"on_rwy"}
+	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+	local flaprqst = dr_flaprqst[0]
+
+	rwy_id_to_msg(rwy_id, msg)
+	if dist < min_takeoff_dist and dist_to_msg(dist, msg) then
+		msg[#msg + 1] = "rmng"
+	end
+
+	if flaprqst < min_takeoff_flap or flaprqst > max_takeoff_flap then
+		msg[#msg + 1] = "flaps"
+		msg[#msg + 1] = "flaps"
+	end
+
+	raas_play_msg(msg)
+end
+
 local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
 		raas_on_rwy_ann[arpt_id .. rwy_id] = nil
 		return
 	end
 
+	local now = os.time()
+	if on_rwy_timer ~= -1 and ((now - on_rwy_timer > on_rwy_warn_initial and
+	    on_rwy_warnings == 0) or (now - on_rwy_timer - on_rwy_warn_initial >
+	    on_rwy_warnings * on_rwy_warn_repeat)) and
+	    on_rwy_warnings < on_rwy_warn_max_n then
+		on_rwy_warnings = on_rwy_warnings + 1
+		perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+	end
+
 	if raas_on_rwy_ann[arpt_id .. rwy_id] == nil then
 		if dr_gs[0] < SPEED_THRESH then
-			local msg = "On runway. " ..
-			    rwy_id_to_speak_str(rwy_id)
-			local dist = vect2_abs(vect2_sub(opp_thr_v,
-			    pos_v))
-			local dist_to_speak = dist_to_speak_str(dist)
-
-			if dist < min_takeoff_dist and dist_to_speak ~= nil then
-				msg = msg .. " " .. dist_to_speak ..
-				    " Remaining."
-			end
-			XPLMSpeakString(msg)
+			perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 		end
 		raas_on_rwy_ann[arpt_id .. rwy_id] = true
 	end
 end
 
 local function stop_check_reset(arpt_id, rwy_id)
+	short_rwy_takeoff_chk = false
 	if raas_accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
 		raas_accel_stop_max_spd[arpt_id .. rwy_id] = nil
 		raas_accel_stop_ann_initial = 0
@@ -1418,12 +1478,22 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH then
 			local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 
-			if dist < len / 2 and not long_landing_ann then
+			if (dist < len / 2 or (dist <= min_landing_dist and
+			    len >= min_landing_dist)) and
+			    not long_landing_ann then
 				long_landing_ann = true
-				XPLMSpeakString("Long landing! Long landing!")
+				raas_play_msg({"long_land", "long_land"})
 			end
 		end
 		return
+	end
+
+	if short_rwy_takeoff_chk == false then
+		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+		short_rwy_takeoff_chk = true
+		if dist < min_takeoff_dist then
+			raas_play_msg({"short_rwy", "short_rwy"})
+		end
 	end
 
 	maxspd = raas_accel_stop_max_spd[arpt_id .. rwy_id]
@@ -1433,12 +1503,13 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	end
 	if gs < maxspd - ACCEL_STOP_SPD_THRESH then
 		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
-		local dist_to_speak = dist_to_speak_str(dist)
 
 		if raas_accel_stop_ann_initial == 0 then
+			local msg = {}
 			raas_accel_stop_ann_initial = dist
-			if dist_to_speak ~= nil then
-				XPLMSpeakString(dist_to_speak .. " Remaining.")
+			if dist_to_msg(dist, msg) then
+				msg[#msg + 1] = "rmng"
+				raas_play_msg(msg)
 			end
 		elseif dist < raas_accel_stop_ann_initial - STOP_INIT_DELAY
 		    then
@@ -1447,10 +1518,12 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 				local max = info["max"]
 				local ann = info["ann"]
 
-				if dist < raas_accel_stop_dist_cutoff and
+				if dist < accel_stop_dist_cutoff and
 				    dist > min and dist < max and not ann then
-					XPLMSpeakString(dist_to_speak ..
-					    " Remaining.")
+					local msg = {}
+					dist_to_msg(dist, msg)
+					msg[#msg + 1] = "rmng"
+					raas_play_msg(msg)
 					info["ann"] = true
 				end
 			end
@@ -1496,12 +1569,22 @@ local function raas_ground_on_runway_aligned()
 		end
 	end
 
+	if on_rwy and dr_gs[0] < STOPPED_THRESH then
+		if on_rwy_timer == -1 then
+			logMsg("on_rwy_timer started")
+			on_rwy_timer = os.time()
+		end
+	else
+		on_rwy_timer = -1
+		on_rwy_warnings = 0
+	end
+
 	-- Taxiway takeoff check
 	if not on_rwy and dr_gs[0] >= SPEED_THRESH and
 	    dr_rad_alt[0] < RADALT_GRD_THRESH then
 		if not on_twy_ann then
 			on_twy_ann = true
-			XPLMSpeakString("Caution! On taxiway! On taxiway!")
+			raas_play_msg({"caution", "on_twy", "on_twy"})
 		end
 	elseif dr_gs[0] < SPEED_THRESH or
 	    dr_rad_alt[0] >= RADALT_GRD_THRESH then
@@ -1509,18 +1592,71 @@ local function raas_ground_on_runway_aligned()
 	end
 end
 
-local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg)
+local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
+    alt)
 	local rwy_id = rwy["id" .. suffix]
 	local arpt_id = arpt["arpt_id"]
+	local elev = arpt["elev"]
 
-	if raas_air_apch_rwy_ann[arpt_id .. rwy_id] == nil and
-	    point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
+	if point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
 	    math.abs(rel_hdg(hdg, rwy["hdg" .. suffix])) < HDG_ALIGN_THRESH then
-		XPLMSpeakString("Approaching. " .. rwy_id_to_speak_str(rwy_id))
-		raas_air_apch_rwy_ann[arpt_id .. rwy_id] = true
+		local msg = {}
+
+		-- If we're below 950 ft AFE and haven't annunciated yet
+		if alt < elev + RAAS_APCH_FLAP1_THRESH and
+		    alt > elev + RAAS_APCH_FLAP1_THRESH - RAAS_APCH_ALT_WINDOW
+		    and not raas_air_apch_flap1_ann[arpt_id .. rwy_id] and
+		    dr_flaprqst[0] < min_landing_flap then
+			msg[#msg + 1] = "flaps"
+			msg[#msg + 1] = "flaps"
+			raas_air_apch_flap1_ann[arpt_id .. rwy_id] = true
+		end
+		if alt < elev + RAAS_APCH_FLAP2_THRESH and
+		    alt > elev + RAAS_APCH_FLAP2_THRESH - RAAS_APCH_ALT_WINDOW
+		    and not raas_air_apch_flap2_ann[arpt_id .. rwy_id] and
+		    dr_flaprqst[0] < min_landing_flap then
+			msg[#msg + 1] = "flaps"
+			msg[#msg + 1] = "flaps"
+			raas_air_apch_flap2_ann[arpt_id .. rwy_id] = true
+		end
+
+		-- If we are below 470 ft AFE and we haven't annunciated yet
+		if alt < elev + RAAS_APCH_ALT_THRESH and
+		    raas_air_apch_rwy_ann[arpt_id .. rwy_id] == nil then
+			-- Don't annunciate if we are too low
+			if alt > elev + RAAS_APCH_ALT_THRESH -
+			    RAAS_APCH_ALT_WINDOW then
+				if dr_flaprqst[0] >= min_landing_flap then
+					msg[#msg + 1] = "apch"
+
+					rwy_id_to_msg(rwy_id, msg)
+					if rwy["len"] < min_landing_dist then
+						msg[#msg + 1] = "caution"
+						msg[#msg + 1] = "short_rwy"
+						msg[#msg + 1] = "short_rwy"
+					end
+				else
+					msg[#msg + 1] = "unstable"
+					msg[#msg + 1] = "unstable"
+				end
+				raas_air_apch_rwy_ann[arpt_id .. rwy_id] = true
+			end
+		end
+
+		if not isemptytable(msg) then
+			raas_play_msg(msg)
+		end
 	elseif raas_air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
 	    not point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) then
 		raas_air_apch_rwy_ann[arpt_id .. rwy_id] = nil
+	end
+end
+
+local function reset_airport_approach_table(tbl, arpt_id)
+	for id, val in pairs(tbl) do
+		if id:find(arpt_id) == 1 then
+			tbl[id] = nil
+		end
 	end
 end
 
@@ -1528,14 +1664,12 @@ local function raas_air_runway_approach_arpt(arpt)
 	local alt = dr_baro_alt[0]
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
-	if alt > arpt["elev"] + RAAS_APCH_ALT_THRESH or
-	    alt < arpt["elev"] + RAAS_APCH_ALT_THRESH - RAAS_APCH_ALT_WINDOW
-	    then
-		for id, val in pairs(raas_air_apch_rwy_ann) do
-			if id:find(arpt_id) == 1 then
-				raas_air_apch_rwy_ann[id] = nil
-			end
-		end
+	local elev = arpt["elev"]
+	if alt > elev + RAAS_APCH_FLAP1_THRESH + RAAS_APCH_ALT_WINDOW or
+	    alt < elev - RAAS_APCH_ALT_THRESH - RAAS_APCH_ALT_WINDOW then
+		reset_airport_approach_table(raas_air_apch_flap1_ann, arpt_id)
+		reset_airport_approach_table(raas_air_apch_flap2_ann, arpt_id)
+		reset_airport_approach_table(raas_air_apch_rwy_ann, arpt_id)
 		return
 	end
 
@@ -1543,8 +1677,10 @@ local function raas_air_runway_approach_arpt(arpt)
 	local hdg = dr_hdg[0]
 
 	for i, rwy in pairs(arpt["rwys"]) do
-		raas_air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg)
-		raas_air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v, hdg)
+		raas_air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg,
+		    alt)
+		raas_air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v, hdg,
+		    alt)
 	end
 end
 
@@ -1612,6 +1748,8 @@ function raas_dbg_draw()
 	local nearest_arpt_id = nil
 	local nearest_arpt_dist = ARPT_LOAD_THRESH
 
+	graphics.set_width(2)
+
 	-- locate the nearest airport to us
 	local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
 	for arpt_id, arpt in pairs(cur_arpts) do
@@ -1630,18 +1768,22 @@ function raas_dbg_draw()
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, cur_arpt["fpp"])
 	local vel_v = acf_vel_vector()
 
+	draw_scale = math.min(650 / vect2_abs(pos_v), 1)
+
 	graphics.set_color(1, 0, 0, 1)
 	graphics.draw_line(make_x(-5), make_y(0), make_x(5), make_y(0))
 	graphics.draw_line(make_x(0), make_y(-5), make_x(0), make_y(5))
 
-	graphics.set_color(0.6, 0.6, 0.6, 1)
-
 	for rwy_id, rwy in pairs(cur_arpt["rwys"]) do
-		draw_bbox(rwy["tora_bbox"])
-		draw_bbox(rwy["asda_bbox"])
-		draw_bbox(rwy["prox_bbox"])
+		graphics.set_color(1, 1, 1, 0.5)
 		draw_bbox(rwy["apch_prox_bbox1"])
 		draw_bbox(rwy["apch_prox_bbox2"])
+		graphics.set_color(0, 0, 1, 0.67)
+		draw_bbox(rwy["prox_bbox"])
+		graphics.set_color(1, 0, 0, 1)
+		draw_bbox(rwy["asda_bbox"])
+		graphics.set_color(0, 1, 0, 1)
+		draw_bbox(rwy["tora_bbox"])
 	end
 
 	graphics.set_color(1, 1, 1, 1)
@@ -1654,7 +1796,66 @@ function raas_dbg_draw()
 	    make_x(tgt[1]), make_y(tgt[2]))
 end
 
-function load_acf_config()
+local function load_msg_table()
+	for msgid, msg in pairs(messages) do
+		local fname = SCRIPT_DIRECTORY .. "RAAS" ..
+		    DIRECTORY_SEPARATOR .. voice_gender ..
+		    DIRECTORY_SEPARATOR .. msgid .. ".wav"
+		local snd_f = io.open(fname)
+		local sz = snd_f:seek("end")
+
+		snd_f:close()
+		msg["snd"] = load_WAV_file(fname)
+		-- all our sound files are mono, 16-bit, 44.1 kHz, so simply
+		-- estimate the length based on file size
+		msg["dur"] = (sz - 44) / 2 / 44100
+	end
+end
+
+function raas_play_msg(msg)
+	logMsg("play_msg: " .. table.show(msg, "msg"))
+
+	if not isemptytable(cur_msg) then
+		if cur_msg["snd"] ~= nil then
+			stop_sound(cur_msg["snd"])
+		end
+		cur_msg = {}
+	end
+
+	cur_msg["msg" ] = msg
+	cur_msg["playing"] = 0
+end
+
+function raas_snd_sched()
+	if isemptytable(cur_msg) then
+		return
+	end
+
+	local now = os.clock()
+	local started = cur_msg["started"]
+	local playing = cur_msg["playing"]
+
+	if started == nil or started < now -
+	    messages[cur_msg["msg"][playing]]["dur"] - 0.1 then
+		if playing == nil then
+			playing = 1
+		else
+			playing = playing + 1
+		end
+		if playing > #cur_msg["msg"] then
+			cur_msg = {}
+			return
+		end
+
+		local msg = messages[cur_msg["msg"][playing]]
+		cur_msg["started"] = now
+		cur_msg["playing"] = playing
+		cur_msg["snd"] = msg["snd"]
+		play_sound(msg["snd"])
+	end
+end
+
+local function load_acf_config()
 	local acf_cfg_f = io.open(AIRCRAFT_PATH .. "RAAS.cfg")
 
 	if acf_cfg_f ~= nil then
@@ -1697,8 +1898,10 @@ while nav_ref ~= XPLM_NAV_NOT_FOUND do
 end
 
 load_acf_config()
+load_msg_table()
 
 do_often('raas_exec()')
-if debug_enabled then
-	do_every_draw('raas_dbg_draw()')
-end
+do_every_draw('raas_snd_sched()')
+
+-- Uncomment the line below to get a nice debug display
+--do_every_draw('raas_dbg_draw()')
