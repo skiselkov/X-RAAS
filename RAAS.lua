@@ -192,18 +192,30 @@ RAAS advisories:
 
 --]]
 
-local HDG_ALIGN_THRESH = 20			-- degrees
+local HDG_ALIGN_THRESH = 25			-- degrees
 local SPEED_THRESH = 20.5			-- m/s, 40 knots
 local EARTH_MSL = 6371000			-- meters
 local RAAS_PROXIMITY_LAT_FRACT = 3
 local RAAS_PROXIMITY_LON_DISPL = 305		-- meters, 1000 ft
 local RAAS_PROXIMITY_TIME_FACT = 2
-local RADALT_GRD_THRESH = 10
+local RADALT_GRD_THRESH = 5
+local RADALT_FLARE_THRESH = 50
 local RAAS_STARTUP_DELAY = 3			-- seconds
 local RWY_DISPLACED_THR_MARGIN = 10
 local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
 local MIN_TAKEOFF_DIST = 1000
+local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
+local STOP_INIT_DELAY = 300
+
+local RAAS_APCH_PROXIMITY_LAT_ANGLE = 3.5	-- degrees
+local RAAS_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
+local RAAS_APCH_ALT_THRESH = 470		-- feet
+local RAAS_APCH_ALT_WINDOW = 270		-- feet
+
+-- precomputed, since it doesn't change
+local RAAS_APCH_PROXIMITY_LAT_DISPL = RAAS_APCH_PROXIMITY_LON_DISPL *
+    math.tan(math.rad(RAAS_APCH_PROXIMITY_LAT_ANGLE))
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
     dr_nw_offset
@@ -216,7 +228,33 @@ local apt_dat = {}
 
 local raas_on_rwy_ann = {}
 local raas_apch_rwy_ann = {}
+local raas_air_apch_rwy_ann = {}
 local on_twy_ann = false
+local long_landing_ann = false
+
+local raas_accel_stop_max_spd = {}
+local raas_accel_stop_ann_initial = 0
+local raas_accel_stop_distances = {
+	-- Because we examine these ranges in 1 second intervals, there is
+	-- a maximum speed at which we are guaranteed to announce the distance
+	-- remaining. The ranges are configured so as to allow for a healthy
+	-- maximum speed margin over anything that could be reasonably attained
+	-- over that portion of the runway.
+	{["max"] = 3169, ["min"] = 3048},	-- 10400-10000 ft, maxspd 235 KT
+	{["max"] = 2864, ["min"] = 2743},	-- 9400-9000 ft, maxspd 235 KT
+	{["max"] = 2560, ["min"] = 2439},	-- 8400-8000 ft, maxspd 235 KT
+	{["max"] = 2255, ["min"] = 2134},	-- 7400-7000 ft, maxspd 235 KT
+	{["max"] = 1950, ["min"] = 1828},	-- 6400-6000 ft, maxspd 235 KT
+	{["max"] = 1645, ["min"] = 1524},	-- 5400-5000 ft, maxspd 235 KT
+	{["max"] = 1341, ["min"] = 1220},	-- 4400-4000 ft, maxspd 235 KT
+	{["max"] = 1036, ["min"] = 915},	-- 3400-3000 ft, maxspd 235 KT
+	{["max"] = 731, ["min"] = 610},		-- 2400-2000 ft, maxspd 235 KT
+	{["max"] = 426, ["min"] = 305},		-- 1400-1000 ft, maxspd 235 KT
+	{["max"] = 213, ["min"] = 153},		-- 700-500 ft, maxspd 118 KT
+	{["max"] = 60, ["min"] = 31}		-- 200-100 ft, maxspd 59 KT
+}
+local airborne = false
+local departed = false
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -377,8 +415,8 @@ function rel_hdg(hdg1, hdg2)
 	end
 end
 
-function ft2m(ft)
-	return ft / 3.281
+function m2ft(m)
+	return m * 3.281
 end
 
 function vect2_abs(a)
@@ -952,6 +990,101 @@ local function map_apt_dats(xpdir)
 	end
 end
 
+--[[
+The approach proximity bounding box is constructed as follows:
+    5500 meters
+    |<------->|
+    |         |
+  d +-_  (c1) |
+    |   -._3 degrees
+    |      -_ c
+    |         +-------------------------------+
+    |         | ====  ----         ----  ==== |
+  x +   thr_v-+ ==== - ------> dir_v - - ==== |
+    |         | ====  ----         ----  ==== |
+    |         +-------------------------------+
+    |      _- b
+    |   _-.
+  a +--    (b1)
+  If there is another parallel runway, we make sure our bounding boxes
+  don't overlap.
+--]]
+local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
+	local x, a, b, b1, c, c1, d
+	local bbox = {}
+	local limit_left, limit_right = 1000000, 1000000
+
+	x = vect2_add(thr_v, vect2_set_abs(vect2_neg(dir_v),
+	    RAAS_APCH_PROXIMITY_LON_DISPL))
+	a = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, true),
+	    width / 2 + RAAS_APCH_PROXIMITY_LAT_DISPL))
+	b = vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, true), width / 2))
+	c = vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, false), width / 2))
+	d = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, false),
+	    width / 2 + RAAS_APCH_PROXIMITY_LAT_DISPL))
+
+	-- If our rwy_id designator contains a L/C/R, then we need to
+	-- look for another parallel runway
+	if #rwy_id >= 3 then
+		local num_id = rwy_id:sub(1, 2)
+		local myhdg = dir2hdg(dir_v)
+
+		for i, orwy in pairs(db_rwys) do
+			if (orwy[2]:sub(1, 2) == num_id and
+			    orwy[2] ~= rwy_id) or
+			    (orwy[7]:sub(1, 2) == num_id and
+			    orwy[7] ~= rwy_id) then
+				-- this is a parallel runway, measure the
+				-- distance to it from us
+				local othr_v = sph2fpp({orwy[3], orwy[4]}, fpp)
+				local v = vect2_sub(othr_v, thr_v)
+				local a = rel_hdg(dir2hdg(dir_v), dir2hdg(v))
+				local dist = math.abs(math.sin(math.rad(a)) *
+				    vect2_abs(v))
+
+				logMsg("distance between rwys " .. rwy_id ..
+				    " and " .. orwy[2] .. ": " .. dist ..
+				    " angle: " .. a)
+				if a < 0 then
+					limit_left = math.min(dist / 2,
+					    limit_left)
+				else
+					limit_right = math.min(dist / 2,
+					    limit_right)
+				end
+			end
+		end
+	end
+
+	if limit_left < RAAS_APCH_PROXIMITY_LAT_DISPL then
+		c1 = vect2vect_isect(vect2_sub(d, c), c, vect2_neg(dir_v),
+		    vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, false),
+		    limit_left)), false)
+		d = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, false),
+		    limit_left))
+	end
+	if limit_right < RAAS_APCH_PROXIMITY_LAT_DISPL then
+		b1 = vect2vect_isect(vect2_sub(b, a), a, vect2_neg(dir_v),
+		    vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, true),
+		    limit_right)), false)
+		a = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, true),
+		    limit_right))
+	end
+
+	bbox[#bbox + 1] = a
+	if b1 then
+		bbox[#bbox + 1] = b1
+	end
+	bbox[#bbox + 1] = b
+	bbox[#bbox + 1] = c
+	if c1 then
+		bbox[#bbox + 1] = c1
+	end
+	bbox[#bbox + 1] = d
+
+	return bbox
+end
+
 local function load_rwy_info(arpt_id, fpp)
 	local rwys = {}
 	local db_arpt = apt_dat[arpt_id]
@@ -1006,19 +1139,22 @@ local function load_rwy_info(arpt_id, fpp)
 		    ["t2y"] = thr2_v[2],
 		    ["hdg1"] = hdg1,
 		    ["hdg2"] = hdg2,
+		    ["width"] = width,
+		    ["len"] = vect2_abs(vect2_sub(thr2_v, thr1_v))
 		}
 
 		local len = vect2_abs(dir_v)
-		local prox_bbox = make_rwy_bbox(thr1_v, dir_v,
+
+		rwy["tora_bbox"] = make_rwy_bbox(thr1_v, dir_v, width, len, 0)
+		rwy["asda_bbox"] = make_rwy_bbox(thr1_v, dir_v, width,
+		    len + blast2, blast1)
+		rwy["prox_bbox"] = make_rwy_bbox(thr1_v, dir_v,
 		    RAAS_PROXIMITY_LAT_FRACT * width,
 		    len + RAAS_PROXIMITY_LON_DISPL, RAAS_PROXIMITY_LON_DISPL)
-		local tora_bbox = make_rwy_bbox(thr1_v, dir_v, width, len, 0)
-		local asda_bbox = make_rwy_bbox(thr1_v, dir_v, width,
-		    len + blast2, blast1)
-
-		rwy["tora_bbox"] = tora_bbox
-		rwy["asda_bbox"] = asda_bbox
-		rwy["prox_bbox"] = prox_bbox
+		rwy["apch_prox_bbox1"] = make_apch_prox_bbox(db_rwys, id1,
+		    thr1_v, width, dir_v, fpp)
+		rwy["apch_prox_bbox2"] = make_apch_prox_bbox(db_rwys, id1,
+		    thr2_v, width, vect2_neg(dir_v), fpp)
 
 		rwys[#rwys + 1] = rwy
 	end
@@ -1069,7 +1205,6 @@ local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
 	for arpt_id, coords in pairs(lon_tbl) do
 		local arpt_pos = sph2ecef(coords)
 		if vect3_abs(vect3_sub(pos, arpt_pos)) < ARPT_LOAD_THRESH then
-			logMsg("arpt " .. arpt_id .. " in range")
 			arpt_list[arpt_id] = coords
 		end
 	end
@@ -1151,7 +1286,7 @@ local function rwy_id_to_speak_str(rwy_id)
 end
 
 local function dist_to_speak_str(dist)
-	local use_feet = true
+	local use_feet = false
 
 	if use_feet then
 		local dist_ft = dist * 3.281
@@ -1166,11 +1301,21 @@ local function dist_to_speak_str(dist)
 			return nil
 		end
 	else
-		local dist_3s = math.floor(dist / 300)
-		if dist_3s >= 1 then
-			return (dist_3s * 3) ..". Hundred."
+		local dist_300incr = math.floor(dist / 300) * 300
+		local dist_thousands = math.floor(dist_300incr / 1000)
+		local dist_hundreds = dist_300incr % 1000
+		if dist_thousands > 0 and dist_hundreds > 0 then
+			return dist_thousands ..". Thousand. " ..
+			    (dist_hundreds / 100) .. ". Hundred."
+		elseif dist_thousands > 0 then
+			return dist_thousands .. ". Thousand."
 		elseif dist >= 100 then
-			return "One. Hundred."
+			if dist_hundreds > 0 then
+				return math.floor(dist_hundreds / 100) ..
+				    ". Hundred."
+			else
+				return "One. Hundred."
+			end
 		elseif dist >= 30 then
 			return "Thirty."
 		else
@@ -1220,27 +1365,90 @@ local function raas_ground_runway_approach()
 end
 
 local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
-	if math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH then
-		if raas_on_rwy_ann[arpt_id .. rwy_id] == nil then
-			if dr_gs[0] < SPEED_THRESH then
-				local msg = "On runway. " ..
-				    rwy_id_to_speak_str(rwy_id)
-				local dist = vect2_abs(vect2_sub(opp_thr_v,
-				    pos_v))
-				local dist_to_speak = dist_to_speak_str(dist)
-				logMsg("dist: " .. dist)
-
-				if dist < MIN_TAKEOFF_DIST and
-				    dist_to_speak ~= nil then
-					msg = msg .. " " .. dist_to_speak ..
-					    " Remaining."
-				end
-				XPLMSpeakString(msg)
-			end
-			raas_on_rwy_ann[arpt_id .. rwy_id] = true
-		end
-	else
+	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
 		raas_on_rwy_ann[arpt_id .. rwy_id] = nil
+		return
+	end
+
+	if raas_on_rwy_ann[arpt_id .. rwy_id] == nil then
+		if dr_gs[0] < SPEED_THRESH then
+			local msg = "On runway. " ..
+			    rwy_id_to_speak_str(rwy_id)
+			local dist = vect2_abs(vect2_sub(opp_thr_v,
+			    pos_v))
+			local dist_to_speak = dist_to_speak_str(dist)
+
+			if dist < MIN_TAKEOFF_DIST and dist_to_speak ~= nil then
+				msg = msg .. " " .. dist_to_speak ..
+				    " Remaining."
+			end
+			XPLMSpeakString(msg)
+		end
+		raas_on_rwy_ann[arpt_id .. rwy_id] = true
+	end
+end
+
+local function stop_check_reset(arpt_id, rwy_id)
+	if raas_accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
+		raas_accel_stop_max_spd[arpt_id .. rwy_id] = nil
+		raas_accel_stop_ann_initial = 0
+		for i, info in pairs(raas_accel_stop_distances) do
+			info["ann"] = false
+		end
+	end
+end
+
+local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
+	local gs = dr_gs[0]
+	local maxspd
+	if gs < SPEED_THRESH then
+		stop_check_reset(arpt_id, rwy_id)
+		return
+	end
+	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
+		return
+	end
+	if dr_rad_alt[0] > RADALT_GRD_THRESH then
+		stop_check_reset(arpt_id, rwy_id)
+		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH then
+			local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+
+			if dist < len / 2 and not long_landing_ann then
+				long_landing_ann = true
+				XPLMSpeakString("Long landing! Long landing!")
+			end
+		end
+		return
+	end
+
+	maxspd = raas_accel_stop_max_spd[arpt_id .. rwy_id]
+	if maxspd == nil or gs > maxspd then
+		raas_accel_stop_max_spd[arpt_id .. rwy_id] = gs
+		maxspd = gs
+	end
+	if gs < maxspd - ACCEL_STOP_SPD_THRESH then
+		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+		local dist_to_speak = dist_to_speak_str(dist)
+
+		if raas_accel_stop_ann_initial == 0 then
+			raas_accel_stop_ann_initial = dist
+			if dist_to_speak ~= nil then
+				XPLMSpeakString(dist_to_speak .. " Remaining.")
+			end
+		elseif dist < raas_accel_stop_ann_initial - STOP_INIT_DELAY
+		    then
+			for i, info in pairs(raas_accel_stop_distances) do
+				local min = info["min"]
+				local max = info["max"]
+				local ann = info["ann"]
+
+				if dist > min and dist < max and not ann then
+					XPLMSpeakString(dist_to_speak ..
+					    " Remaining.")
+					info["ann"] = true
+				end
+			end
+		end
 	end
 end
 
@@ -1248,17 +1456,25 @@ local function raas_ground_on_runway_aligned_arpt(arpt)
 	local on_rwy = false
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 	local arpt_id = arpt["arpt_id"]
+	local hdg = dr_hdg[0]
 
 	for i, rwy in pairs(arpt["rwys"]) do
 		local rwy_id = rwy["id1"]
-		if raas_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
-		    point_in_poly(pos_v, rwy["tora_bbox"]) then
+		if point_in_poly(pos_v, rwy["tora_bbox"]) then
 			on_rwy = true
-			local hdg = dr_hdg[0]
 			on_rwy_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
 			    pos_v, {rwy["t2x"], rwy["t2y"]})
 			on_rwy_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
 			    pos_v, {rwy["t1x"], rwy["t1y"]})
+		end
+		if point_in_poly(pos_v, rwy["asda_bbox"]) then
+			stop_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
+			    pos_v, {rwy["t2x"], rwy["t2y"]}, rwy["len"])
+			stop_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
+			    pos_v, {rwy["t1x"], rwy["t1y"]}, rwy["len"])
+		else
+			stop_check_reset(arpt_id, rwy["id1"])
+			stop_check_reset(arpt_id, rwy["id2"])
 		end
 	end
 
@@ -1287,6 +1503,56 @@ local function raas_ground_on_runway_aligned()
 	end
 end
 
+local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg)
+	local rwy_id = rwy["id" .. suffix]
+	local arpt_id = arpt["arpt_id"]
+
+	if raas_air_apch_rwy_ann[arpt_id .. rwy_id] == nil and
+	    point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
+	    math.abs(rel_hdg(hdg, rwy["hdg" .. suffix])) < HDG_ALIGN_THRESH then
+		XPLMSpeakString("Approaching. " .. rwy_id_to_speak_str(rwy_id))
+		raas_air_apch_rwy_ann[arpt_id .. rwy_id] = true
+	elseif raas_air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
+	    not point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) then
+		raas_air_apch_rwy_ann[arpt_id .. rwy_id] = nil
+	end
+end
+
+local function raas_air_runway_approach_arpt(arpt)
+	local alt = dr_baro_alt[0]
+	local hdg = dr_hdg[0]
+	local arpt_id = arpt["arpt_id"]
+	if alt > arpt["elev"] + RAAS_APCH_ALT_THRESH or
+	    alt < arpt["elev"] + RAAS_APCH_ALT_THRESH - RAAS_APCH_ALT_WINDOW
+	    then
+		for id, val in pairs(raas_air_apch_rwy_ann) do
+			if id:find(arpt_id) == 1 then
+				raas_air_apch_rwy_ann[id] = nil
+			end
+		end
+		return
+	end
+
+	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
+	local hdg = dr_hdg[0]
+
+	for i, rwy in pairs(arpt["rwys"]) do
+		raas_air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg)
+		raas_air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v, hdg)
+	end
+end
+
+local function raas_air_runway_approach()
+	if not airborne and departed then
+		raas_air_apch_rwy_ann = {}
+		return
+	end
+
+	for arpt_id, arpt in pairs(cur_arpts) do
+		raas_air_runway_approach_arpt(arpt)
+	end
+end
+
 function raas_exec()
 	-- Before we start, wait a set delay, because X-Plane's datarefs
 	-- needed for proper init are unstable, so we'll give them an
@@ -1297,11 +1563,22 @@ function raas_exec()
 
 	load_nearest_airports(nil)
 
+	-- the '10' addition here is for hysteresis
+	if not on_rwy and dr_rad_alt[0] > RADALT_FLARE_THRESH + 10 then
+		departed = true
+		airborne = true
+		long_landing_ann = false
+	elseif dr_rad_alt[0] < RADALT_GRD_THRESH then
+		departed = false
+		airborne = false
+	end
+
 	raas_ground_runway_approach()
 	raas_ground_on_runway_aligned()
+	raas_air_runway_approach()
 end
 
-local draw_scale = 0.4
+local draw_scale = 0.1
 
 local function make_x(coord)
 	local offx = 1280
@@ -1315,12 +1592,12 @@ end
 
 local function draw_bbox(bbox)
 	local graphics = require 'graphics'
-	for i = 0, 3 do
+	for i = 0, #bbox - 1 do
 		graphics.draw_line(
 		    make_x(bbox[i + 1][1]),
 		    make_y(bbox[i + 1][2]),
-		    make_x(bbox[(i + 1) % 4 + 1][1]),
-		    make_y(bbox[(i + 1) % 4 + 1][2]))
+		    make_x(bbox[(i + 1) % #bbox + 1][1]),
+		    make_y(bbox[(i + 1) % #bbox + 1][2]))
 	end
 end
 
@@ -1357,6 +1634,8 @@ function raas_dbg_draw()
 		draw_bbox(rwy["tora_bbox"])
 		draw_bbox(rwy["asda_bbox"])
 		draw_bbox(rwy["prox_bbox"])
+		draw_bbox(rwy["apch_prox_bbox1"])
+		draw_bbox(rwy["apch_prox_bbox2"])
 	end
 
 	graphics.set_color(1, 1, 1, 1)
