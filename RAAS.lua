@@ -204,7 +204,6 @@ local RAAS_STARTUP_DELAY = 3			-- seconds
 local RWY_DISPLACED_THR_MARGIN = 10
 local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
-local MIN_TAKEOFF_DIST = 1000
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
 
@@ -212,6 +211,11 @@ local RAAS_APCH_PROXIMITY_LAT_ANGLE = 3.5	-- degrees
 local RAAS_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
 local RAAS_APCH_ALT_THRESH = 470		-- feet
 local RAAS_APCH_ALT_WINDOW = 270		-- feet
+
+-- config stuff (can be overridden by acf)
+local use_imperial = false
+local min_takeoff_dist = 1000			-- meters
+local accel_stop_dist_cutoff = 4000		-- meters
 
 -- precomputed, since it doesn't change
 local RAAS_APCH_PROXIMITY_LAT_DISPL = RAAS_APCH_PROXIMITY_LON_DISPL *
@@ -225,6 +229,8 @@ local last_airport_reload = 0
 
 local airport_geo_table = {}
 local apt_dat = {}
+
+local dbg_enabled = false
 
 local raas_on_rwy_ann = {}
 local raas_apch_rwy_ann = {}
@@ -240,6 +246,7 @@ local raas_accel_stop_distances = {
 	-- remaining. The ranges are configured so as to allow for a healthy
 	-- maximum speed margin over anything that could be reasonably attained
 	-- over that portion of the runway.
+	{["max"] = 3474, ["min"] = 3353},	-- 11400-11000 ft, maxspd 235 KT
 	{["max"] = 3169, ["min"] = 3048},	-- 10400-10000 ft, maxspd 235 KT
 	{["max"] = 2864, ["min"] = 2743},	-- 9400-9000 ft, maxspd 235 KT
 	{["max"] = 2560, ["min"] = 2439},	-- 8400-8000 ft, maxspd 235 KT
@@ -1286,9 +1293,7 @@ local function rwy_id_to_speak_str(rwy_id)
 end
 
 local function dist_to_speak_str(dist)
-	local use_feet = false
-
-	if use_feet then
+	if use_imperial then
 		local dist_ft = dist * 3.281
 		if dist_ft >= 1000 then
 			return tostring(math.floor(dist_ft / 1000)) ..
@@ -1378,7 +1383,7 @@ local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 			    pos_v))
 			local dist_to_speak = dist_to_speak_str(dist)
 
-			if dist < MIN_TAKEOFF_DIST and dist_to_speak ~= nil then
+			if dist < min_takeoff_dist and dist_to_speak ~= nil then
 				msg = msg .. " " .. dist_to_speak ..
 				    " Remaining."
 			end
@@ -1442,7 +1447,8 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 				local max = info["max"]
 				local ann = info["ann"]
 
-				if dist > min and dist < max and not ann then
+				if dist < raas_accel_stop_dist_cutoff and
+				    dist > min and dist < max and not ann then
 					XPLMSpeakString(dist_to_speak ..
 					    " Remaining.")
 					info["ann"] = true
@@ -1648,6 +1654,16 @@ function raas_dbg_draw()
 	    make_x(tgt[1]), make_y(tgt[2]))
 end
 
+function load_acf_config()
+	local acf_cfg_f = io.open(AIRCRAFT_PATH .. "RAAS.cfg")
+
+	if acf_cfg_f ~= nil then
+		local cfg = acf_cfg_f:read("*all")
+		lua.execute(cfg)
+		acf_cfg_f:close()
+	end
+end
+
 raas_reset()
 
 map_apt_dats(SCRIPT_DIRECTORY .. "../../../../")
@@ -1680,5 +1696,9 @@ while nav_ref ~= XPLM_NAV_NOT_FOUND do
 	nav_ref = XPLMGetNextNavAid(nav_ref)
 end
 
+load_acf_config()
+
 do_often('raas_exec()')
-do_every_draw('raas_dbg_draw()')
+if debug_enabled then
+	do_every_draw('raas_dbg_draw()')
+end
