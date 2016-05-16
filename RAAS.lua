@@ -216,6 +216,7 @@ local RAAS_APCH_ALT_THRESH = 470		-- feet
 local RAAS_APCH_ALT_WINDOW = 270		-- feet
 
 -- config stuff (to be overridden by acf)
+local RAAS_enabled = true
 local use_imperial = true
 local min_takeoff_dist = 1000			-- meters
 local min_landing_dist = 900			-- meters
@@ -1589,7 +1590,6 @@ local function raas_ground_on_runway_aligned()
 
 	if on_rwy and dr_gs[0] < STOPPED_THRESH then
 		if on_rwy_timer == -1 then
-			logMsg("on_rwy_timer started")
 			on_rwy_timer = os.time()
 		end
 	else
@@ -1831,8 +1831,6 @@ local function load_msg_table()
 end
 
 function raas_play_msg(msg)
-	logMsg("play_msg: " .. table.show(msg, "msg"))
-
 	if not isemptytable(cur_msg) then
 		if cur_msg["snd"] ~= nil then
 			stop_sound(cur_msg["snd"])
@@ -1883,6 +1881,17 @@ local function load_acf_config()
 	end
 end
 
+load_acf_config()
+
+if not RAAS_enabled then
+	logMsg("X-RAAS: DISABLED")
+	return
+else
+	logMsg("X-RAAS: ENABLED")
+end
+
+load_msg_table()
+
 raas_reset()
 
 map_apt_dats(SCRIPT_DIRECTORY .. "../../../../")
@@ -1914,9 +1923,6 @@ while nav_ref ~= XPLM_NAV_NOT_FOUND do
 	end
 	nav_ref = XPLMGetNextNavAid(nav_ref)
 end
-
-load_acf_config()
-load_msg_table()
 
 do_often('raas_exec()')
 do_every_draw('raas_snd_sched()')
