@@ -225,9 +225,9 @@ local min_landing_flap = 0.5			-- ratio
 local min_takeoff_flap = 0.1			-- ratio
 local max_takeoff_flap = 0.75			-- ratio
 
-local on_rwy_warn_initial = 5			-- seconds
-local on_rwy_warn_repeat = 10			-- seconds
-local on_rwy_warn_max_n = 3
+local on_rwy_warn_initial = 60			-- seconds
+local on_rwy_warn_repeat = 60			-- seconds
+local on_rwy_warn_max_n = 5
 
 -- precomputed, since it doesn't change
 local RAAS_APCH_PROXIMITY_LAT_DISPL = RAAS_APCH_PROXIMITY_LON_DISPL *
@@ -986,9 +986,9 @@ local function map_apt_dats(xpdir)
 
 	if is_on_windows() then
 		logMsg("on windows")
-		if not map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
+		if map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
 		    apt_dat) == 0 then
-			recreate_apt_dat_cache(xpdir)
+			recreate_apt_dat_cache(xpdir, apt_dats)
 		end
 		return
 	else
@@ -1042,7 +1042,7 @@ local function map_apt_dats(xpdir)
 
 	if cache_outdated or map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
 	    apt_dat) == 0 then
-		recreate_apt_dat_cache(xpdir)
+		recreate_apt_dat_cache(xpdir, apt_dats)
 	end
 end
 
