@@ -281,8 +281,8 @@ local on_rwy_warnings = 0
 
 local accel_stop_max_spd = {}
 local accel_stop_ann_initial = 0
-local airborne = false
 local departed = false
+local arriving = false
 
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
@@ -929,29 +929,6 @@ local function find_all_apt_dats(xpdir)
 	return apt_dats
 end
 
-local function get_mtime(files)
-	local mtimes = {}
-	local cmd = "python '" .. SCRIPT_DIRECTORY .. "mtime.py' "
-
-	for i, file in pairs(files) do
-		cmd = cmd .. "'" .. file .. "'"
-	end
-	local cmd_f = io.popen(cmd)
-	if cmd_f == nil then
-		return nil
-	end
-	while true do
-		local line = cmd_f:read()
-		if line == nil then
-			break
-		end
-		mtimes[#mtimes + 1] = tonumber(line)
-	end
-	cmd_f:close()
-
-	return mtimes
-end
-
 local function recreate_apt_dat_cache(xpdir, apt_dats)
 	for i, apt_dat_fname in pairs(apt_dats) do
 		map_apt_dat(apt_dat_fname, apt_dat)
@@ -981,73 +958,10 @@ local function recreate_apt_dat_cache(xpdir, apt_dats)
 	apt_dat_cache_f:close()
 end
 
-local function is_on_windows()
-	return package.config:sub(1,1) == '\\'
-end
-
 local function map_apt_dats(xpdir)
 	local apt_dats = find_all_apt_dats(xpdir)
-	local cache_outdated = false
-	local apt_dat_list_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.list")
 
-	if is_on_windows() then
-		logMsg("on windows")
-		if map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
-		    apt_dat) == 0 then
-			recreate_apt_dat_cache(xpdir, apt_dats)
-		end
-		return
-	else
-		logMsg("not on windows")
-	end
-
-	if apt_dat_list_f ~= nil then
-		local entries_in_cache = 0
-		for line in apt_dat_list_f:lines() do
-			entries_in_cache = entries_in_cache + 1
-			if line ~= apt_dats[entries_in_cache] then
-				cache_outdated = true
-				break
-			end
-		end
-		if entries_in_cache ~= #apt_dats then
-			cache_outdated = true
-		end
-		apt_dat_list_f:close()
-	else
-		cache_outdated = true
-	end
-
-	-- update the apt_dat.list file
-	if cache_outdated then
-		apt_dat_list_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.list",
-		    "w")
-		for i, line in pairs(apt_dats) do
-			apt_dat_list_f:write(line .. "\n")
-		end
-		apt_dat_list_f:close()
-	end
-
-	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.cache")
-	if apt_dat_cache_f ~= nil then
-		apt_dat_cache_f:close()
-
-		local apt_dat_cache_mtime = next(get_mtime({SCRIPT_DIRECTORY ..
-		    "apt_dat.cache"}))
-		local apt_dat_mtimes = get_mtime(apt_dats)
-
-		for i, mtime in pairs(apt_dat_mtimes) do
-			if apt_dat_cache_mtime < mtime then
-				cache_outdated = true
-				break
-			end
-		end 
-	else
-		cache_outdated = true
-	end
-
-	if cache_outdated or map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache",
-	    apt_dat) == 0 then
+	if map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache", apt_dat) == 0 then
 		recreate_apt_dat_cache(xpdir, apt_dats)
 	end
 end
@@ -1495,6 +1409,18 @@ local function stop_check_reset(arpt_id, rwy_id)
 	end
 end
 
+local function takeoff_rwy_dist_check(opp_thr_v, pos_v)
+	if short_rwy_takeoff_chk then
+		return
+	end
+
+	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+	short_rwy_takeoff_chk = true
+	if dist < RAAS_min_takeoff_dist then
+		raas_play_msg({"short_rwy", "short_rwy"})
+	end
+end
+
 local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	local gs = dr_gs[0]
 	local maxspd
@@ -1520,15 +1446,9 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		return
 	end
 
---[[
-	if short_rwy_takeoff_chk == false then
-		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
-		short_rwy_takeoff_chk = true
-		if dist < RAAS_min_takeoff_dist then
-			raas_play_msg({"short_rwy", "short_rwy"})
-		end
+	if not arriving then
+		takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	end
-	--]]
 
 	maxspd = accel_stop_max_spd[arpt_id .. rwy_id]
 	if maxspd == nil or gs > maxspd then
@@ -1623,6 +1543,8 @@ local function raas_ground_on_runway_aligned()
 	    dr_rad_alt[0] >= RADALT_GRD_THRESH then
 		on_twy_ann = false
 	end
+
+	return on_rwy
 end
 
 local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
@@ -1634,7 +1556,6 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 	if point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
 	    math.abs(rel_hdg(hdg, rwy["hdg" .. suffix])) < HDG_ALIGN_THRESH then
 		local msg = {}
-
 		-- If we're below 950 ft AFE and haven't annunciated yet
 		if alt < elev + RWY_APCH_FLAP1_THRESH and
 		    alt > elev + RWY_APCH_FLAP1_THRESH - RWY_APCH_ALT_WINDOW
@@ -1663,7 +1584,8 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 					msg[#msg + 1] = "apch"
 
 					rwy_id_to_msg(rwy_id, msg)
-					if rwy["len"] < RAAS_min_landing_dist then
+					if rwy["len"] < RAAS_min_landing_dist
+					    then
 						msg[#msg + 1] = "caution"
 						msg[#msg + 1] = "short_rwy"
 						msg[#msg + 1] = "short_rwy"
@@ -1698,8 +1620,7 @@ local function raas_air_runway_approach_arpt(arpt)
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
-	if alt > elev + RWY_APCH_FLAP1_THRESH + RWY_APCH_ALT_WINDOW or
-	    alt < elev - RWY_APCH_ALT_THRESH - RWY_APCH_ALT_WINDOW then
+	if alt > elev + RWY_APCH_FLAP1_THRESH or alt < elev then
 		reset_airport_approach_table(air_apch_flap1_ann, arpt_id)
 		reset_airport_approach_table(air_apch_flap2_ann, arpt_id)
 		reset_airport_approach_table(air_apch_rwy_ann, arpt_id)
@@ -1718,10 +1639,10 @@ local function raas_air_runway_approach_arpt(arpt)
 end
 
 local function raas_air_runway_approach()
-	if not airborne and departed then
+	--[[if departed then
 		air_apch_rwy_ann = {}
 		return
-	end
+	end--]]
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		raas_air_runway_approach_arpt(arpt)
@@ -1739,13 +1660,15 @@ function raas_exec()
 	load_nearest_airports(nil)
 
 	-- the '10' addition here is for hysteresis
-	if not on_rwy and dr_rad_alt[0] > RADALT_FLARE_THRESH + 10 then
+	if dr_rad_alt[0] > RADALT_FLARE_THRESH + 10 then
 		departed = true
-		airborne = true
+		arriving = true
 		long_landing_ann = false
 	elseif dr_rad_alt[0] < RADALT_GRD_THRESH then
 		departed = false
-		airborne = false
+		if dr_gs[0] < SPEED_THRESH then
+			arriving = false
+		end
 	end
 
 	raas_ground_runway_approach()
