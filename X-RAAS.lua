@@ -263,6 +263,8 @@ RAAS_accel_stop_distances = {
 	[100] = {["max"] = 60, ["min"] = 31}		-- 200-100 ft, 59 KT
 }
 
+RAAS_too_high_enabled = false
+
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
     dr_nw_offset, dr_flaprqst, dr_gear
 local cur_arpts = {}
@@ -1687,7 +1689,8 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 			msg[#msg + 1] = "flaps"
 			ann_table[arpt_id .. rwy_id] = true
 		elseif rwy_gpa ~= 0 and dr_gear[0] == 1 and
-		    gpa_act > gpa_limit(rwy_gpa) then
+		    gpa_act > gpa_limit(rwy_gpa) and
+		    RAAS_too_high_enabled then
 			msg[#msg + 1] = "too_high"
 			msg[#msg + 1] = "too_high"
 			ann_table[arpt_id .. rwy_id] = true
@@ -1731,8 +1734,8 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			if alt > elev + RWY_APCH_ALT_THRESH -
 			    RWY_APCH_ALT_WINDOW then
 				if dr_flaprqst[0] < RAAS_min_landing_flap or
-				    (rwy_gpa ~= 0 and gpa_act >
-				    gpa_limit(rwy_gpa))
+				    (rwy_gpa ~= 0 and gpa_act > gpa_limit(
+				    rwy_gpa) and RAAS_too_high_enabled)
 				    then
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
