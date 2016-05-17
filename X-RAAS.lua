@@ -207,6 +207,8 @@ local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
+local GPA_TOO_HIGH_FACT = 2			-- multiplier
+local GPA_TOO_HIGH_LIMIT = 8			-- degrees
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -216,7 +218,7 @@ local RWY_APCH_PROXIMITY_LAT_DISPL = RWY_APCH_PROXIMITY_LON_DISPL *
 local RWY_APCH_FLAP1_THRESH = 950		-- feet
 local RWY_APCH_FLAP2_THRESH = 600		-- feet
 local RWY_APCH_ALT_THRESH = 470			-- feet
-local RWY_APCH_ALT_WINDOW = 270			-- feet
+local RWY_APCH_ALT_WINDOW = 250			-- feet
 
 local MSG_PRIO_LOW = 1
 local MSG_PRIO_MED = 2
@@ -262,7 +264,7 @@ RAAS_accel_stop_distances = {
 }
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
-    dr_nw_offset, dr_flaprqst
+    dr_nw_offset, dr_flaprqst, dr_gear
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -463,7 +465,7 @@ local function m2ft(m)
 end
 
 local function ft2m(ft)
-	return m / 3.281
+	return ft / 3.281
 end
 
 function vect2_abs(a)
@@ -789,6 +791,7 @@ local function raas_reset()
 	dr_nw_offset = dataref_table("sim/flightmodel/parts/" ..
 	    "tire_z_no_deflection")
 	dr_flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
+	dr_gear = dataref_table("sim/aircraft/parts/acf_gear_deploy")
 
 	raas_start_time = os.time()
 end
@@ -862,6 +865,13 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 		if line:find("1 ") == 1 then
 			local comps = split(line, " ")
 			local new_icao = comps[5]
+			local TA, TL = 0, 0
+
+			if #comps >= 7 and comps[6]:find("TA:") == 1 and
+			    comps[7]:find("TL:") == 1 then
+				TA = tonumber(comps[6])
+				TL = tonumber(comps[7])
+			end
 
 			if icao ~= nil and isemptytable(apt["rwys"]) then
 				-- if the previous airport contained
@@ -877,7 +887,9 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 				arpt_cnt = arpt_cnt + 1
 				apt = {
 				    ["elev"] = tonumber(comps[2]),
-				    ["rwys"] = {}
+				    ["rwys"] = {},
+				    ["TA"] = TA,
+				    ["TL"] = TL
 				}
 				icao = new_icao
 				apt_dat[icao] = apt
@@ -896,11 +908,29 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 			local displ2 = comps[8 + 9 + 4]
 			local blast2 = comps[8 + 9 + 5]
 			local rwys = apt["rwys"]
+			local gpa1, gpa2, tch1, tch2, telev1, telev2 =
+			    0, 0, 0, 0, 0, 0
+
+			if #comps >= 8 + 9 + 5 + 6 and
+			    comps[8 + 9 + 5 + 1]:find("GPA1:") == 1 and
+			    comps[8 + 9 + 5 + 2]:find("GPA2:") == 1 and
+			    comps[8 + 9 + 5 + 3]:find("TCH1:") == 1 and
+			    comps[8 + 9 + 5 + 4]:find("TCH2:") == 1 and
+			    comps[8 + 9 + 5 + 3]:find("TELEV1:") == 1 and
+			    comps[8 + 9 + 5 + 4]:find("TELEV2:") == 1 then
+				gpa1 = tonumber(comps[8 + 9 + 5 + 1])
+				gpa2 = tonumber(comps[8 + 9 + 5 + 2])
+				tch1 = tonumber(comps[8 + 9 + 5 + 3])
+				tch2 = tonumber(comps[8 + 9 + 5 + 4])
+				telev1 = tonumber(comps[8 + 9 + 5 + 5])
+				telev2 = tonumber(comps[8 + 9 + 5 + 6])
+			end
 
 			rwys[#rwys + 1] = {
 				width,
 				id1, lat1, lon1, displ1, blast1,
-				id2, lat2, lon2, displ2, blast2
+				id2, lat2, lon2, displ2, blast2,
+				gpa1, gpa2, tch1, tch2, telev1, telev2
 			}
 		end
 	end
@@ -936,17 +966,72 @@ local function find_all_apt_dats(xpdir)
 	return apt_dats
 end
 
+local function load_airports_txt(xpdir)
+	local airports_fname = xpdir .. "Custom Data" .. DIRECTORY_SEPARATOR ..
+	    "GNS430" .. DIRECTORY_SEPARATOR .. "navdata" ..
+	    DIRECTORY_SEPARATOR .. "Airports.txt"
+	local fp = io.open(airports_fname)
+	local last_arpt = nil
+
+	if fp == nil then
+		logMsg("X-RAAS: missing Airports.txt, please check your " ..
+		    "navdata and recreate the cache")
+		return
+	end
+
+	for line in fp:lines() do
+		if line:find("A,") == 1 then
+			local comps = split(line, ",")
+			local icao = comps[2]
+			local TA = tonumber(comps[7])
+			local TL = tonumber(comps[8])
+			local db_arpt = apt_dat[icao]
+
+			last_arpt = nil
+
+			if db_arpt ~= nil then
+				last_arpt = db_arpt
+				last_arpt["TA"] = TA
+				last_arpt["TL"] = TL
+			end
+		elseif line:find("R,") == 1 and last_arpt ~= nil then
+			local comps = split(line, ",")
+			local rwy_id = comps[2]
+			local telev = tonumber(comps[11])
+			local gpa = tonumber(comps[12])
+			local tch = tonumber(comps[13])
+
+			for i, rwy in pairs(last_arpt["rwys"]) do
+				if rwy[2] == rwy_id then
+					rwy[12] = gpa
+					rwy[14] = tch
+					rwy[16] = telev
+				elseif rwy[7] == rwy_id then
+					rwy[13] = gpa
+					rwy[15] = tch
+					rwy[17] = telev
+					break
+				end
+			end
+		end
+	end
+
+	fp:close()
+end
+
 local function recreate_apt_dat_cache(xpdir, apt_dats)
 	for i, apt_dat_fname in pairs(apt_dats) do
 		map_apt_dat(apt_dat_fname, apt_dat)
 	end
+	load_airports_txt(xpdir)
 
 	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY ..
 	    "X-RAAS_apt_dat.cache", "w")
 	for icao, arpt in pairs(apt_dat) do
 		local rwys = arpt["rwys"]
 		apt_dat_cache_f:write("1 " .. arpt["elev"] ..
-		    " 0 0 " .. icao .. "\n")
+		    " 0 0 " .. icao .. " TA:" .. arpt["TA"] .. " TL:" ..
+		    arpt["TL"] .. "\n")
 		for i, rwy in pairs(rwys) do
 			apt_dat_cache_f:write("100 " .. rwy[1] ..
 			    " 0 0 0 0 0 0 " ..
@@ -959,7 +1044,14 @@ local function recreate_apt_dat_cache(xpdir, apt_dats)
 			    rwy[8] .. " " ..
 			    rwy[9] .. " " ..
 			    rwy[10] .. " " ..
-			    rwy[11] .. "\n")
+			    rwy[11] ..
+			    " GPA1:" .. rwy[12] ..
+			    " GPA2:" .. rwy[13] ..
+			    " TCH1:" .. rwy[14] ..
+			    " TCH2:" .. rwy[15] ..
+			    " TELEV1:" .. rwy[16] ..
+			    " TELEV2:" .. rwy[17] ..
+			    "\n")
 		end
 	end
 	apt_dat_cache_f:close()
@@ -1121,7 +1213,13 @@ local function load_rwy_info(arpt_id, fpp)
 		    ["hdg1"] = hdg1,
 		    ["hdg2"] = hdg2,
 		    ["width"] = width,
-		    ["len"] = vect2_abs(vect2_sub(thr2_v, thr1_v))
+		    ["len"] = vect2_abs(vect2_sub(thr2_v, thr1_v)),
+		    ["GPA1"] = db_rwy[12],
+		    ["GPA2"] = db_rwy[13],
+		    ["TCH1"] = db_rwy[14],
+		    ["TCH2"] = db_rwy[15],
+		    ["TELEV1"] = db_rwy[16],
+		    ["TELEV2"] = db_rwy[17]
 		}
 
 		local len = vect2_abs(dir_v)
@@ -1316,7 +1414,7 @@ local function dist_to_msg(dist, msg)
 	return true
 end
 
-local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
+local function ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
     vel_v)
 	local prox_bbox = rwy["prox_bbox"]
 	local arpt_id = arpt["arpt_id"]
@@ -1337,23 +1435,23 @@ local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 	end
 end
 
-local function raas_ground_runway_approach_arpt(arpt, vel_v)
+local function ground_runway_approach_arpt(arpt, vel_v)
 	local fpp = arpt["fpp"]
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 
 	for i, rwy in pairs(arpt["rwys"]) do
 		local rwy_id = rwy["id1"]
-		raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
+		ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 		    vel_v)
 	end
 end
 
-local function raas_ground_runway_approach()
+local function ground_runway_approach()
 	local lat, lon = dr_lat[0], dr_lon[0]
 	local vel_v = acf_vel_vector()
 
 	for arpt_id, arpt in pairs(cur_arpts) do
-		raas_ground_runway_approach_arpt(arpt, vel_v)
+		ground_runway_approach_arpt(arpt, vel_v)
 	end
 end
 
@@ -1509,7 +1607,7 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	end
 end
 
-local function raas_ground_on_runway_aligned_arpt(arpt)
+local function ground_on_runway_aligned_arpt(arpt)
 	local on_rwy = false
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 	local arpt_id = arpt["arpt_id"]
@@ -1538,11 +1636,11 @@ local function raas_ground_on_runway_aligned_arpt(arpt)
 	return on_rwy
 end
 
-local function raas_ground_on_runway_aligned()
+local function ground_on_runway_aligned()
 	local on_rwy = false
 
 	for arpt_id, arpt in pairs(cur_arpts) do
-		if raas_ground_on_runway_aligned_arpt(arpt) then
+		if ground_on_runway_aligned_arpt(arpt) then
 			on_rwy = true
 		end
 	end
@@ -1576,33 +1674,55 @@ local function raas_ground_on_runway_aligned()
 	return on_rwy
 end
 
-local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
+local function gpa_limit(gpa)
+	return math.min(gpa * GPA_TOO_HIGH_FACT, GPA_TOO_HIGH_LIMIT)
+end
+
+local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
+    ceil, thickness, msg, ann_table, critical)
+	if not ann_table[arpt_id .. rwy_id] and
+	    alt < elev + ceil and alt > elev + ceil - thickness then
+		if dr_flaprqst[0] < RAAS_min_landing_flap then
+			msg[#msg + 1] = "flaps"
+			msg[#msg + 1] = "flaps"
+			ann_table[arpt_id .. rwy_id] = true
+		elseif rwy_gpa ~= 0 and dr_gear[0] == 1 and
+		    gpa_act > gpa_limit(rwy_gpa) then
+			msg[#msg + 1] = "too_high"
+			msg[#msg + 1] = "too_high"
+			ann_table[arpt_id .. rwy_id] = true
+		end
+	end
+end
+
+local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
     alt)
 	local rwy_id = rwy["id" .. suffix]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
+	local rwy_hdg = rwy["hdg" .. suffix]
 
 	if point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
-	    math.abs(rel_hdg(hdg, rwy["hdg" .. suffix])) < HDG_ALIGN_THRESH then
+	    math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH then
 		local msg = {}
 		local msg_prio = MSG_PRIO_MED
-		-- If we're below 950 ft AFE and haven't annunciated yet
-		if alt < elev + RWY_APCH_FLAP1_THRESH and
-		    alt > elev + RWY_APCH_FLAP1_THRESH - RWY_APCH_ALT_WINDOW
-		    and not air_apch_flap1_ann[arpt_id .. rwy_id] and
-		    dr_flaprqst[0] < RAAS_min_landing_flap then
-			msg[#msg + 1] = "flaps"
-			msg[#msg + 1] = "flaps"
-			air_apch_flap1_ann[arpt_id .. rwy_id] = true
-		end
-		if alt < elev + RWY_APCH_FLAP2_THRESH and
-		    alt > elev + RWY_APCH_FLAP2_THRESH - RWY_APCH_ALT_WINDOW
-		    and not air_apch_flap2_ann[arpt_id .. rwy_id] and
-		    dr_flaprqst[0] < RAAS_min_landing_flap then
-			msg[#msg + 1] = "flaps"
-			msg[#msg + 1] = "flaps"
-			air_apch_flap2_ann[arpt_id .. rwy_id] = true
-		end
+		local thr_v = {rwy["t" .. suffix .. "x"],
+		    rwy["t" .. suffix .. "y"]}
+		local dist = vect2_abs(vect2_sub(pos_v, thr_v))
+
+		local rwy_gpa = rwy["GPA" .. suffix]
+		local tch = rwy["TCH" .. suffix]
+		local telev = rwy["TELEV" .. suffix]
+		local above_tch = ft2m(dr_baro_alt[0] - (telev + tch))
+
+		gpa_act = math.deg(math.atan(above_tch / dist))
+
+		apch_config_chk(arpt_id, rwy_id, alt, telev + tch, gpa_act,
+		    rwy_gpa, RWY_APCH_FLAP1_THRESH, RWY_APCH_ALT_WINDOW, msg,
+		    air_apch_flap1_ann, false)
+		apch_config_chk(arpt_id, rwy_id, alt, telev + tch, gpa_act,
+		    rwy_gpa, RWY_APCH_FLAP2_THRESH, RWY_APCH_ALT_WINDOW, msg,
+		    air_apch_flap2_ann, false)
 
 		-- If we are below 470 ft AFE and we haven't annunciated yet
 		if alt < elev + RWY_APCH_ALT_THRESH and
@@ -1610,7 +1730,14 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			-- Don't annunciate if we are too low
 			if alt > elev + RWY_APCH_ALT_THRESH -
 			    RWY_APCH_ALT_WINDOW then
-				if dr_flaprqst[0] >= RAAS_min_landing_flap then
+				if dr_flaprqst[0] < RAAS_min_landing_flap or
+				    (rwy_gpa ~= 0 and gpa_act >
+				    gpa_limit(rwy_gpa))
+				    then
+					msg[#msg + 1] = "unstable"
+					msg[#msg + 1] = "unstable"
+					msg_prio = MSG_PRIO_HI
+				else
 					msg[#msg + 1] = "apch"
 
 					rwy_id_to_msg(rwy_id, msg)
@@ -1620,10 +1747,6 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 						msg[#msg + 1] = "short_rwy"
 						msg[#msg + 1] = "short_rwy"
 					end
-				else
-					msg[#msg + 1] = "unstable"
-					msg[#msg + 1] = "unstable"
-					msg_prio = MSG_PRIO_HI
 				end
 				air_apch_rwy_ann[arpt_id .. rwy_id] = true
 			end
@@ -1646,7 +1769,7 @@ local function reset_airport_approach_table(tbl, arpt_id)
 	end
 end
 
-local function raas_air_runway_approach_arpt(arpt)
+local function air_runway_approach_arpt(arpt)
 	local alt = dr_baro_alt[0]
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
@@ -1662,22 +1785,20 @@ local function raas_air_runway_approach_arpt(arpt)
 	local hdg = dr_hdg[0]
 
 	for i, rwy in pairs(arpt["rwys"]) do
-		raas_air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg,
+		air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg,
 		    alt)
-		raas_air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v, hdg,
+		air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v, hdg,
 		    alt)
 	end
 end
 
-local function raas_air_runway_approach()
-	--[[if departed then
-		air_apch_rwy_ann = {}
-		return
-	end--]]
-
+local function air_runway_approach()
 	for arpt_id, arpt in pairs(cur_arpts) do
-		raas_air_runway_approach_arpt(arpt)
+		air_runway_approach_arpt(arpt)
 	end
+end
+
+local function altimeter_setting()
 end
 
 function raas_exec()
@@ -1705,9 +1826,10 @@ function raas_exec()
 		long_landing_ann = false
 	end
 
-	raas_ground_runway_approach()
-	raas_ground_on_runway_aligned()
-	raas_air_runway_approach()
+	ground_runway_approach()
+	ground_on_runway_aligned()
+	air_runway_approach()
+	altimeter_setting()
 end
 
 local draw_scale = 0.1
@@ -1784,6 +1906,8 @@ function raas_dbg_draw()
 	    make_x(pos_v[1]), make_y(pos_v[2]) + 5)
 	graphics.draw_line(make_x(pos_v[1]), make_y(pos_v[2]),
 	    make_x(tgt[1]), make_y(tgt[2]))
+
+	graphics.set_width(1)
 end
 
 local function load_msg_table()
@@ -1819,6 +1943,7 @@ function raas_play_msg(msg, prio)
 	cur_msg["prio"] = prio
 end
 
+-- This is the sound scheduling loop.
 function raas_snd_sched()
 	if isemptytable(cur_msg) then
 		return
@@ -1872,12 +1997,14 @@ else
 end
 
 load_msg_table()
-
 raas_reset()
 
-map_apt_dats(SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
+local xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
     DIRECTORY_SEPARATOR .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
-    DIRECTORY_SEPARATOR)
+    DIRECTORY_SEPARATOR
+
+map_apt_dats(xpdir)
+load_airports_txt(xpdir)
 
 local nav_ref = XPLMGetFirstNavAid()
 while nav_ref ~= XPLM_NAV_NOT_FOUND do
