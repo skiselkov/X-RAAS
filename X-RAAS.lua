@@ -209,6 +209,7 @@ local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
 local GPA_TOO_HIGH_FACT = 2			-- multiplier
 local GPA_TOO_HIGH_LIMIT = 8			-- degrees
+local BOGUS_THR_ELEV_LIMIT = 500		-- feet
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -263,7 +264,7 @@ RAAS_accel_stop_distances = {
 	[100] = {["max"] = 60, ["min"] = 31}		-- 200-100 ft, 59 KT
 }
 
-RAAS_too_high_enabled = false
+RAAS_too_high_enabled = true
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
     dr_nw_offset, dr_flaprqst, dr_gear
@@ -1689,8 +1690,7 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 			msg[#msg + 1] = "flaps"
 			ann_table[arpt_id .. rwy_id] = true
 		elseif rwy_gpa ~= 0 and dr_gear[0] == 1 and
-		    gpa_act > gpa_limit(rwy_gpa) and
-		    RAAS_too_high_enabled then
+		    gpa_act > gpa_limit(rwy_gpa) then
 			msg[#msg + 1] = "too_high"
 			msg[#msg + 1] = "too_high"
 			ann_table[arpt_id .. rwy_id] = true
@@ -1718,14 +1718,19 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		local telev = rwy["TELEV" .. suffix]
 		local above_tch = ft2m(dr_baro_alt[0] - (telev + tch))
 
-		gpa_act = math.deg(math.atan(above_tch / dist))
+		if RAAS_too_high_enabled and tch ~= 0 and rwy_gpa ~= 0 and
+		    math.abs(elev - telev) < BOGUS_THR_ELEV_LIMIT then
+			gpa_act = math.deg(math.atan(above_tch / dist))
+		else
+			gpa_act = 0
+		end
 
 		apch_config_chk(arpt_id, rwy_id, alt, telev + tch, gpa_act,
 		    rwy_gpa, RWY_APCH_FLAP1_THRESH, RWY_APCH_ALT_WINDOW, msg,
 		    air_apch_flap1_ann, false)
 		apch_config_chk(arpt_id, rwy_id, alt, telev + tch, gpa_act,
-		    rwy_gpa, RWY_APCH_FLAP2_THRESH, RWY_APCH_ALT_WINDOW, msg,
-		    air_apch_flap2_ann, false)
+		    rwy_gpa, RWY_APCH_FLAP2_THRESH, RWY_APCH_FLAP2_THRESH -
+		    RWY_APCH_ALT_THRESH, msg, air_apch_flap2_ann, false)
 
 		-- If we are below 470 ft AFE and we haven't annunciated yet
 		if alt < elev + RWY_APCH_ALT_THRESH and
@@ -1734,8 +1739,7 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			if alt > elev + RWY_APCH_ALT_THRESH -
 			    RWY_APCH_ALT_WINDOW then
 				if dr_flaprqst[0] < RAAS_min_landing_flap or
-				    (rwy_gpa ~= 0 and gpa_act > gpa_limit(
-				    rwy_gpa) and RAAS_too_high_enabled)
+				    gpa_act > gpa_limit(rwy_gpa)
 				    then
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
