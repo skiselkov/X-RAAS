@@ -1818,7 +1818,7 @@ end
 
 local function load_msg_table()
 	for msgid, msg in pairs(messages) do
-		local fname = SCRIPT_DIRECTORY .. "RAAS" ..
+		local fname = SCRIPT_DIRECTORY .. "RAAS_msgs" ..
 		    DIRECTORY_SEPARATOR .. voice_gender ..
 		    DIRECTORY_SEPARATOR .. msgid .. ".wav"
 		local snd_f = io.open(fname)
