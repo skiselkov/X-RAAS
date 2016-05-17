@@ -197,7 +197,7 @@ local SPEED_THRESH = 20.5			-- m/s, 40 knots
 local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
 local RWY_PROXIMITY_LAT_FRACT = 3
-local RWY_PROXIMITY_LON_DISPL = 305		-- meters, 1000 ft
+local RWY_PROXIMITY_LON_DISPL = 457		-- meters, 1500 ft
 local RWY_PROXIMITY_TIME_FACT = 2
 local RADALT_GRD_THRESH = 5
 local RADALT_FLARE_THRESH = 50
@@ -217,6 +217,10 @@ local RWY_APCH_FLAP1_THRESH = 950		-- feet
 local RWY_APCH_FLAP2_THRESH = 600		-- feet
 local RWY_APCH_ALT_THRESH = 470			-- feet
 local RWY_APCH_ALT_WINDOW = 270			-- feet
+
+local MSG_PRIO_LOW = 1
+local MSG_PRIO_MED = 2
+local MSG_PRIO_HI = 3
 
 -- config stuff (to be overridden by acf)
 RAAS_enabled = true
@@ -910,21 +914,24 @@ local function find_all_apt_dats(xpdir)
 	local apt_dats = {}
 
 	local scenery_packs_ini = io.open(xpdir ..
-	    "Custom Scenery/scenery_packs.ini")
+	    "Custom Scenery" .. DIRECTORY_SEPARATOR .. "scenery_packs.ini")
 
 	if scenery_packs_ini ~= nil then
 		for line in scenery_packs_ini:lines() do
 			if line:find("SCENERY_PACK ") == 1 then
 				local scn_name = line:sub(13)
 				apt_dats[#apt_dats + 1] = xpdir .. scn_name ..
-				    "/Earth nav data/apt.dat"
+				    DIRECTORY_SEPARATOR .. "Earth nav data" ..
+				    DIRECTORY_SEPARATOR .. "apt.dat"
 			end
 		end
 		io.close(scenery_packs_ini)
 	end
 
-	apt_dats[#apt_dats + 1] = xpdir .. "Resources/default scenery/" ..
-	    "default apt dat/Earth nav data/apt.dat", apt_dats
+	apt_dats[#apt_dats + 1] = xpdir .. "Resources" .. DIRECTORY_SEPARATOR ..
+	    "default scenery" .. DIRECTORY_SEPARATOR .. "default apt dat" ..
+	    DIRECTORY_SEPARATOR .. "Earth nav data" .. DIRECTORY_SEPARATOR ..
+	    "apt.dat"
 
 	return apt_dats
 end
@@ -934,8 +941,8 @@ local function recreate_apt_dat_cache(xpdir, apt_dats)
 		map_apt_dat(apt_dat_fname, apt_dat)
 	end
 
-	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY .. "apt_dat.cache",
-	    "w")
+	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY ..
+	    "X-RAAS_apt_dat.cache", "w")
 	for icao, arpt in pairs(apt_dat) do
 		local rwys = arpt["rwys"]
 		apt_dat_cache_f:write("1 " .. arpt["elev"] ..
@@ -961,7 +968,8 @@ end
 local function map_apt_dats(xpdir)
 	local apt_dats = find_all_apt_dats(xpdir)
 
-	if map_apt_dat(SCRIPT_DIRECTORY .. "apt_dat.cache", apt_dat) == 0 then
+	if map_apt_dat(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat.cache", apt_dat) == 0
+	    then
 		recreate_apt_dat_cache(xpdir, apt_dats)
 	end
 end
@@ -1320,7 +1328,7 @@ local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 				local rwy_name = closest_rwy_end(pos_v, rwy)
 				local msg = {"apch"}
 				rwy_id_to_msg(rwy_name, msg)
-				raas_play_msg(msg)
+				raas_play_msg(msg, MSG_PRIO_LOW)
 			end
 			apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
@@ -1364,7 +1372,7 @@ local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 		msg[#msg + 1] = "flaps"
 	end
 
-	raas_play_msg(msg)
+	raas_play_msg(msg, MSG_PRIO_MED)
 end
 
 local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
@@ -1399,7 +1407,6 @@ local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 end
 
 local function stop_check_reset(arpt_id, rwy_id)
-	short_rwy_takeoff_chk = false
 	if accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
 		accel_stop_max_spd[arpt_id .. rwy_id] = nil
 		accel_stop_ann_initial = 0
@@ -1417,7 +1424,37 @@ local function takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 	short_rwy_takeoff_chk = true
 	if dist < RAAS_min_takeoff_dist then
-		raas_play_msg({"short_rwy", "short_rwy"})
+		raas_play_msg({"short_rwy", "short_rwy"}, MSG_PRIO_HI)
+	end
+end
+
+local function perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
+	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+	local msg = {}
+
+	if accel_stop_ann_initial == 0 then
+		accel_stop_ann_initial = dist
+		if dist_to_msg(dist, msg) then
+			msg[#msg + 1] = "rmng"
+			raas_play_msg(msg, MSG_PRIO_MED)
+		end
+	elseif dist < accel_stop_ann_initial - STOP_INIT_DELAY
+	    then
+		for i, info in pairs(RAAS_accel_stop_distances) do
+			local min = info["min"]
+			local max = info["max"]
+			local ann = info["ann"]
+
+			if dist < RAAS_accel_stop_dist_cutoff and
+			    dist > min and dist < max and not ann then
+				local msg = {}
+				dist_to_msg(dist, msg)
+				msg[#msg + 1] = "rmng"
+				info["ann"] = true
+				raas_play_msg(msg, MSG_PRIO_MED)
+				break
+			end
+		end
 	end
 end
 
@@ -1431,16 +1468,26 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
 		return
 	end
+
+	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+
 	if dr_rad_alt[0] > RADALT_GRD_THRESH then
 		stop_check_reset(arpt_id, rwy_id)
 		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH then
-			local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 
 			if (dist < len / 2 or (dist <= RAAS_min_landing_dist and
-			    len >= RAAS_min_landing_dist)) and
-			    not long_landing_ann then
-				long_landing_ann = true
-				raas_play_msg({"long_land", "long_land"})
+			    len >= RAAS_min_landing_dist)) then
+				if not long_landing_ann then
+					local msg = {"long_land", "long_land"}
+					long_landing_ann = true
+					if dist_to_msg(dist, msg) then
+						msg[#msg + 1] = "rmng"
+					end
+					raas_play_msg(msg, MSG_PRIO_HI)
+				else
+					perform_rwy_dist_remaining_callouts(
+					    opp_thr_v, pos_v)
+				end
 			end
 		end
 		return
@@ -1455,33 +1502,10 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		accel_stop_max_spd[arpt_id .. rwy_id] = gs
 		maxspd = gs
 	end
-	if gs < maxspd - ACCEL_STOP_SPD_THRESH then
-		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
-
-		if accel_stop_ann_initial == 0 then
-			local msg = {}
-			accel_stop_ann_initial = dist
-			if dist_to_msg(dist, msg) then
-				msg[#msg + 1] = "rmng"
-				raas_play_msg(msg)
-			end
-		elseif dist < accel_stop_ann_initial - STOP_INIT_DELAY
-		    then
-			for i, info in pairs(RAAS_accel_stop_distances) do
-				local min = info["min"]
-				local max = info["max"]
-				local ann = info["ann"]
-
-				if dist < RAAS_accel_stop_dist_cutoff and
-				    dist > min and dist < max and not ann then
-					local msg = {}
-					dist_to_msg(dist, msg)
-					msg[#msg + 1] = "rmng"
-					raas_play_msg(msg)
-					info["ann"] = true
-				end
-			end
-		end
+	if gs < maxspd - ACCEL_STOP_SPD_THRESH or
+	    dist < RAAS_min_landing_dist then
+		local msg = {}
+		perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v, msg)
 	end
 end
 
@@ -1532,12 +1556,17 @@ local function raas_ground_on_runway_aligned()
 		on_rwy_warnings = 0
 	end
 
+	if not on_rwy then
+		short_rwy_takeoff_chk = false
+	end
+
 	-- Taxiway takeoff check
 	if not on_rwy and dr_gs[0] >= SPEED_THRESH and
 	    dr_rad_alt[0] < RADALT_GRD_THRESH then
 		if not on_twy_ann then
 			on_twy_ann = true
-			raas_play_msg({"caution", "on_twy", "on_twy"})
+			raas_play_msg({"caution", "on_twy", "on_twy"},
+			    MSG_PRIO_HI)
 		end
 	elseif dr_gs[0] < SPEED_THRESH or
 	    dr_rad_alt[0] >= RADALT_GRD_THRESH then
@@ -1556,6 +1585,7 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 	if point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
 	    math.abs(rel_hdg(hdg, rwy["hdg" .. suffix])) < HDG_ALIGN_THRESH then
 		local msg = {}
+		local msg_prio = MSG_PRIO_MED
 		-- If we're below 950 ft AFE and haven't annunciated yet
 		if alt < elev + RWY_APCH_FLAP1_THRESH and
 		    alt > elev + RWY_APCH_FLAP1_THRESH - RWY_APCH_ALT_WINDOW
@@ -1593,13 +1623,14 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 				else
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
+					msg_prio = MSG_PRIO_HI
 				end
 				air_apch_rwy_ann[arpt_id .. rwy_id] = true
 			end
 		end
 
 		if not isemptytable(msg) then
-			raas_play_msg(msg)
+			raas_play_msg(msg, msg_prio)
 		end
 	elseif air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
 	    not point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) then
@@ -1669,6 +1700,9 @@ function raas_exec()
 		if dr_gs[0] < SPEED_THRESH then
 			arriving = false
 		end
+	end
+	if dr_gs[0] < SPEED_THRESH then
+		long_landing_ann = false
 	end
 
 	raas_ground_runway_approach()
@@ -1754,7 +1788,7 @@ end
 
 local function load_msg_table()
 	for msgid, msg in pairs(messages) do
-		local fname = SCRIPT_DIRECTORY .. "RAAS_msgs" ..
+		local fname = SCRIPT_DIRECTORY .. "X-RAAS_msgs" ..
 		    DIRECTORY_SEPARATOR .. RAAS_voice_gender ..
 		    DIRECTORY_SEPARATOR .. msgid .. ".wav"
 		local snd_f = io.open(fname)
@@ -1768,8 +1802,12 @@ local function load_msg_table()
 	end
 end
 
-function raas_play_msg(msg)
+function raas_play_msg(msg, prio)
+	assert(prio ~= nil)
 	if not isemptytable(cur_msg) then
+		if cur_msg["prio"] > prio then
+			return
+		end
 		if cur_msg["snd"] ~= nil then
 			stop_sound(cur_msg["snd"])
 		end
@@ -1778,6 +1816,7 @@ function raas_play_msg(msg)
 
 	cur_msg["msg" ] = msg
 	cur_msg["playing"] = 0
+	cur_msg["prio"] = prio
 end
 
 function raas_snd_sched()
@@ -1836,7 +1875,9 @@ load_msg_table()
 
 raas_reset()
 
-map_apt_dats(SCRIPT_DIRECTORY .. "../../../../")
+map_apt_dats(SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
+    DIRECTORY_SEPARATOR .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
+    DIRECTORY_SEPARATOR)
 
 local nav_ref = XPLMGetFirstNavAid()
 while nav_ref ~= XPLM_NAV_NOT_FOUND do
