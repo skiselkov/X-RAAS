@@ -219,21 +219,26 @@ local RWY_APCH_ALT_THRESH = 470			-- feet
 local RWY_APCH_ALT_WINDOW = 270			-- feet
 
 -- config stuff (to be overridden by acf)
-local RAAS_enabled = true
-local use_imperial = true
-local min_takeoff_dist = 1000			-- meters
-local min_landing_dist = 900			-- meters
-local accel_stop_dist_cutoff = 3000		-- meters
-local voice_gender = "female"
-local min_landing_flap = 0.5			-- ratio
-local min_takeoff_flap = 0.1			-- ratio
-local max_takeoff_flap = 0.75			-- ratio
+RAAS_enabled = true
 
-local on_rwy_warn_initial = 60			-- seconds
-local on_rwy_warn_repeat = 60			-- seconds
-local on_rwy_warn_max_n = 5
+RAAS_use_imperial = true
+RAAS_min_takeoff_dist = 1000			-- meters
+RAAS_min_landing_dist = 800			-- meters
+RAAS_accel_stop_dist_cutoff = 3000		-- meters
+RAAS_voice_gender = "female"
+RAAS_min_landing_flap = 0.5			-- ratio
+RAAS_min_takeoff_flap = 0.1			-- ratio
+RAAS_max_takeoff_flap = 0.75			-- ratio
 
-local accel_stop_distances = {
+RAAS_on_rwy_warn_initial = 60			-- seconds
+RAAS_on_rwy_warn_repeat = 120			-- seconds
+RAAS_on_rwy_warn_max_n = 3
+
+-- Although this can be overridden by the config file, it is not documented
+-- deliberately, as understanding how this table behaves requires some amount
+-- of knowledge of how X-RAAS handles distance readouts. Thus, you change it
+-- at your own peril.
+RAAS_accel_stop_distances = {
 	-- Because we examine these ranges in 1 second intervals, there is
 	-- a maximum speed at which we are guaranteed to announce the distance
 	-- remaining. The ranges are configured so as to allow for a healthy
@@ -1341,7 +1346,7 @@ local function rwy_id_to_msg(rwy_id, msg)
 end
 
 local function dist_to_msg(dist, msg)
-	if use_imperial then
+	if RAAS_use_imperial then
 		local dist_ft = dist * 3.281
 		if dist_ft >= 1000 then
 			local thousands = math.floor(dist_ft / 1000)
@@ -1436,11 +1441,11 @@ local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	local flaprqst = dr_flaprqst[0]
 
 	rwy_id_to_msg(rwy_id, msg)
-	if dist < min_takeoff_dist and dist_to_msg(dist, msg) then
+	if dist < RAAS_min_takeoff_dist and dist_to_msg(dist, msg) then
 		msg[#msg + 1] = "rmng"
 	end
 
-	if flaprqst < min_takeoff_flap or flaprqst > max_takeoff_flap then
+	if flaprqst < RAAS_min_takeoff_flap or flaprqst > RAAS_max_takeoff_flap then
 		msg[#msg + 1] = "flaps"
 		msg[#msg + 1] = "flaps"
 	end
@@ -1449,18 +1454,26 @@ local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 end
 
 local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
-	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
-		on_rwy_ann[arpt_id .. rwy_id] = nil
+	local now = os.time()
+	local rhdg = math.abs(rel_hdg(hdg, rwy_hdg))
+
+	-- If we are not at all on the appropriate runway heading, don't
+	-- generate any annunciations
+	if rhdg >= 90 then
 		return
 	end
 
-	local now = os.time()
-	if on_rwy_timer ~= -1 and ((now - on_rwy_timer > on_rwy_warn_initial and
-	    on_rwy_warnings == 0) or (now - on_rwy_timer - on_rwy_warn_initial >
-	    on_rwy_warnings * on_rwy_warn_repeat)) and
-	    on_rwy_warnings < on_rwy_warn_max_n then
+	if on_rwy_timer ~= -1 and ((now - on_rwy_timer > RAAS_on_rwy_warn_initial and
+	    on_rwy_warnings == 0) or (now - on_rwy_timer - RAAS_on_rwy_warn_initial >
+	    on_rwy_warnings * RAAS_on_rwy_warn_repeat)) and
+	    on_rwy_warnings < RAAS_on_rwy_warn_max_n then
 		on_rwy_warnings = on_rwy_warnings + 1
 		perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+	end
+
+	if rhdg > HDG_ALIGN_THRESH then
+		on_rwy_ann[arpt_id .. rwy_id] = nil
+		return
 	end
 
 	if on_rwy_ann[arpt_id .. rwy_id] == nil then
@@ -1476,7 +1489,7 @@ local function stop_check_reset(arpt_id, rwy_id)
 	if accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
 		accel_stop_max_spd[arpt_id .. rwy_id] = nil
 		accel_stop_ann_initial = 0
-		for i, info in pairs(accel_stop_distances) do
+		for i, info in pairs(RAAS_accel_stop_distances) do
 			info["ann"] = false
 		end
 	end
@@ -1497,8 +1510,8 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH then
 			local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 
-			if (dist < len / 2 or (dist <= min_landing_dist and
-			    len >= min_landing_dist)) and
+			if (dist < len / 2 or (dist <= RAAS_min_landing_dist and
+			    len >= RAAS_min_landing_dist)) and
 			    not long_landing_ann then
 				long_landing_ann = true
 				raas_play_msg({"long_land", "long_land"})
@@ -1511,7 +1524,7 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	if short_rwy_takeoff_chk == false then
 		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 		short_rwy_takeoff_chk = true
-		if dist < min_takeoff_dist then
+		if dist < RAAS_min_takeoff_dist then
 			raas_play_msg({"short_rwy", "short_rwy"})
 		end
 	end
@@ -1534,12 +1547,12 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 			end
 		elseif dist < accel_stop_ann_initial - STOP_INIT_DELAY
 		    then
-			for i, info in pairs(accel_stop_distances) do
+			for i, info in pairs(RAAS_accel_stop_distances) do
 				local min = info["min"]
 				local max = info["max"]
 				local ann = info["ann"]
 
-				if dist < accel_stop_dist_cutoff and
+				if dist < RAAS_accel_stop_dist_cutoff and
 				    dist > min and dist < max and not ann then
 					local msg = {}
 					dist_to_msg(dist, msg)
@@ -1626,7 +1639,7 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		if alt < elev + RWY_APCH_FLAP1_THRESH and
 		    alt > elev + RWY_APCH_FLAP1_THRESH - RWY_APCH_ALT_WINDOW
 		    and not air_apch_flap1_ann[arpt_id .. rwy_id] and
-		    dr_flaprqst[0] < min_landing_flap then
+		    dr_flaprqst[0] < RAAS_min_landing_flap then
 			msg[#msg + 1] = "flaps"
 			msg[#msg + 1] = "flaps"
 			air_apch_flap1_ann[arpt_id .. rwy_id] = true
@@ -1634,7 +1647,7 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		if alt < elev + RWY_APCH_FLAP2_THRESH and
 		    alt > elev + RWY_APCH_FLAP2_THRESH - RWY_APCH_ALT_WINDOW
 		    and not air_apch_flap2_ann[arpt_id .. rwy_id] and
-		    dr_flaprqst[0] < min_landing_flap then
+		    dr_flaprqst[0] < RAAS_min_landing_flap then
 			msg[#msg + 1] = "flaps"
 			msg[#msg + 1] = "flaps"
 			air_apch_flap2_ann[arpt_id .. rwy_id] = true
@@ -1646,11 +1659,11 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			-- Don't annunciate if we are too low
 			if alt > elev + RWY_APCH_ALT_THRESH -
 			    RWY_APCH_ALT_WINDOW then
-				if dr_flaprqst[0] >= min_landing_flap then
+				if dr_flaprqst[0] >= RAAS_min_landing_flap then
 					msg[#msg + 1] = "apch"
 
 					rwy_id_to_msg(rwy_id, msg)
-					if rwy["len"] < min_landing_dist then
+					if rwy["len"] < RAAS_min_landing_dist then
 						msg[#msg + 1] = "caution"
 						msg[#msg + 1] = "short_rwy"
 						msg[#msg + 1] = "short_rwy"
@@ -1819,7 +1832,7 @@ end
 local function load_msg_table()
 	for msgid, msg in pairs(messages) do
 		local fname = SCRIPT_DIRECTORY .. "RAAS_msgs" ..
-		    DIRECTORY_SEPARATOR .. voice_gender ..
+		    DIRECTORY_SEPARATOR .. RAAS_voice_gender ..
 		    DIRECTORY_SEPARATOR .. msgid .. ".wav"
 		local snd_f = io.open(fname)
 		local sz = snd_f:seek("end")
@@ -1876,14 +1889,14 @@ end
 local function load_config(cfgname)
 	local cfg_f = io.open(cfgname)
 	if cfg_f ~= nil then
-		local cfg = acf_cfg_f:read("*all")
-		lua.execute(cfg)
+		local cfg = cfg_f:read("*all")
+		assert(loadstring(cfg))()
 		cfg_f:close()
 	end
 end
 
 local function load_configs()
-	load_config(SCRIPT_DIRECTORY .. "../../../../X-RAAS.cfg")
+	load_config(SCRIPT_DIRECTORY .. "X-RAAS.cfg")
 	load_config(AIRCRAFT_PATH .. "X-RAAS.cfg")
 end
 
@@ -1934,4 +1947,6 @@ do_often('raas_exec()')
 do_every_draw('raas_snd_sched()')
 
 -- Uncomment the line below to get a nice debug display
---do_every_draw('raas_dbg_draw()')
+if RAAS_debug then
+	do_every_draw('raas_dbg_draw()')
+end
