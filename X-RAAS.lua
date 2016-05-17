@@ -196,9 +196,9 @@ local HDG_ALIGN_THRESH = 25			-- degrees
 local SPEED_THRESH = 20.5			-- m/s, 40 knots
 local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
-local RAAS_PROXIMITY_LAT_FRACT = 3
-local RAAS_PROXIMITY_LON_DISPL = 305		-- meters, 1000 ft
-local RAAS_PROXIMITY_TIME_FACT = 2
+local RWY_PROXIMITY_LAT_FRACT = 3
+local RWY_PROXIMITY_LON_DISPL = 305		-- meters, 1000 ft
+local RWY_PROXIMITY_TIME_FACT = 2
 local RADALT_GRD_THRESH = 5
 local RADALT_FLARE_THRESH = 50
 local RAAS_STARTUP_DELAY = 3			-- seconds
@@ -208,12 +208,15 @@ local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
 
-local RAAS_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
-local RAAS_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
-local RAAS_APCH_FLAP1_THRESH = 950		-- feet
-local RAAS_APCH_FLAP2_THRESH = 600		-- feet
-local RAAS_APCH_ALT_THRESH = 470		-- feet
-local RAAS_APCH_ALT_WINDOW = 270		-- feet
+local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
+local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
+-- precomputed, since it doesn't change
+local RWY_APCH_PROXIMITY_LAT_DISPL = RWY_APCH_PROXIMITY_LON_DISPL *
+    math.tan(math.rad(RWY_APCH_PROXIMITY_LAT_ANGLE))
+local RWY_APCH_FLAP1_THRESH = 950		-- feet
+local RWY_APCH_FLAP2_THRESH = 600		-- feet
+local RWY_APCH_ALT_THRESH = 470			-- feet
+local RWY_APCH_ALT_WINDOW = 270			-- feet
 
 -- config stuff (to be overridden by acf)
 local RAAS_enabled = true
@@ -230,9 +233,24 @@ local on_rwy_warn_initial = 60			-- seconds
 local on_rwy_warn_repeat = 60			-- seconds
 local on_rwy_warn_max_n = 5
 
--- precomputed, since it doesn't change
-local RAAS_APCH_PROXIMITY_LAT_DISPL = RAAS_APCH_PROXIMITY_LON_DISPL *
-    math.tan(math.rad(RAAS_APCH_PROXIMITY_LAT_ANGLE))
+local accel_stop_distances = {
+	-- Because we examine these ranges in 1 second intervals, there is
+	-- a maximum speed at which we are guaranteed to announce the distance
+	-- remaining. The ranges are configured so as to allow for a healthy
+	-- maximum speed margin over anything that could be reasonably attained
+	-- over that portion of the runway.
+	[9000] = {["max"] = 2864, ["min"] = 2743},	-- 9400-9000 ft, 235 KT
+	[8000] = {["max"] = 2560, ["min"] = 2439},	-- 8400-8000 ft, 235 KT
+	[7000] = {["max"] = 2255, ["min"] = 2134},	-- 7400-7000 ft, 235 KT
+	[6000] = {["max"] = 1950, ["min"] = 1828},	-- 6400-6000 ft, 235 KT
+	[5000] = {["max"] = 1645, ["min"] = 1524},	-- 5400-5000 ft, 235 KT
+	[4000] = {["max"] = 1341, ["min"] = 1220},	-- 4400-4000 ft, 235 KT
+	[3000] = {["max"] = 1036, ["min"] = 915},	-- 3400-3000 ft, 235 KT
+	[2000] = {["max"] = 731, ["min"] = 610},	-- 2400-2000 ft, 235 KT
+	[1000] = {["max"] = 426, ["min"] = 305},	-- 1400-1000 ft, 235 KT
+	[500] = {["max"] = 213, ["min"] = 153},		-- 700-500 ft, 118 KT
+	[100] = {["max"] = 60, ["min"] = 31}		-- 200-100 ft, 59 KT
+}
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
     dr_nw_offset, dr_flaprqst
@@ -245,37 +263,19 @@ local apt_dat = {}
 
 local dbg_enabled = false
 
-local raas_on_rwy_ann = {}
-local raas_apch_rwy_ann = {}
-local raas_air_apch_rwy_ann = {}
-local raas_air_apch_flap1_ann = {}
-local raas_air_apch_flap2_ann = {}
+local on_rwy_ann = {}
+local apch_rwy_ann = {}
+local air_apch_rwy_ann = {}
+local air_apch_flap1_ann = {}
+local air_apch_flap2_ann = {}
 local on_twy_ann = false
 local long_landing_ann = false
 local short_rwy_takeoff_chk = false
 local on_rwy_timer = -1
 local on_rwy_warnings = 0
 
-local raas_accel_stop_max_spd = {}
-local raas_accel_stop_ann_initial = 0
-local raas_accel_stop_distances = {
-	-- Because we examine these ranges in 1 second intervals, there is
-	-- a maximum speed at which we are guaranteed to announce the distance
-	-- remaining. The ranges are configured so as to allow for a healthy
-	-- maximum speed margin over anything that could be reasonably attained
-	-- over that portion of the runway.
-	{["max"] = 2864, ["min"] = 2743},	-- 9400-9000 ft, maxspd 235 KT
-	{["max"] = 2560, ["min"] = 2439},	-- 8400-8000 ft, maxspd 235 KT
-	{["max"] = 2255, ["min"] = 2134},	-- 7400-7000 ft, maxspd 235 KT
-	{["max"] = 1950, ["min"] = 1828},	-- 6400-6000 ft, maxspd 235 KT
-	{["max"] = 1645, ["min"] = 1524},	-- 5400-5000 ft, maxspd 235 KT
-	{["max"] = 1341, ["min"] = 1220},	-- 4400-4000 ft, maxspd 235 KT
-	{["max"] = 1036, ["min"] = 915},	-- 3400-3000 ft, maxspd 235 KT
-	{["max"] = 731, ["min"] = 610},		-- 2400-2000 ft, maxspd 235 KT
-	{["max"] = 426, ["min"] = 305},		-- 1400-1000 ft, maxspd 235 KT
-	{["max"] = 213, ["min"] = 153},		-- 700-500 ft, maxspd 118 KT
-	{["max"] = 60, ["min"] = 31}		-- 200-100 ft, maxspd 59 KT
-}
+local accel_stop_max_spd = {}
+local accel_stop_ann_initial = 0
 local airborne = false
 local departed = false
 
@@ -1072,13 +1072,13 @@ local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 	local limit_left, limit_right = 1000000, 1000000
 
 	x = vect2_add(thr_v, vect2_set_abs(vect2_neg(dir_v),
-	    RAAS_APCH_PROXIMITY_LON_DISPL))
+	    RWY_APCH_PROXIMITY_LON_DISPL))
 	a = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, true),
-	    width / 2 + RAAS_APCH_PROXIMITY_LAT_DISPL))
+	    width / 2 + RWY_APCH_PROXIMITY_LAT_DISPL))
 	b = vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, true), width / 2))
 	c = vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, false), width / 2))
 	d = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, false),
-	    width / 2 + RAAS_APCH_PROXIMITY_LAT_DISPL))
+	    width / 2 + RWY_APCH_PROXIMITY_LAT_DISPL))
 
 	-- If our rwy_id designator contains a L/C/R, then we need to
 	-- look for another parallel runway
@@ -1110,14 +1110,14 @@ local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 		end
 	end
 
-	if limit_left < RAAS_APCH_PROXIMITY_LAT_DISPL then
+	if limit_left < RWY_APCH_PROXIMITY_LAT_DISPL then
 		c1 = vect2vect_isect(vect2_sub(d, c), c, vect2_neg(dir_v),
 		    vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, false),
 		    limit_left)), false)
 		d = vect2_add(x, vect2_set_abs(vect2_norm(dir_v, false),
 		    limit_left))
 	end
-	if limit_right < RAAS_APCH_PROXIMITY_LAT_DISPL then
+	if limit_right < RWY_APCH_PROXIMITY_LAT_DISPL then
 		b1 = vect2vect_isect(vect2_sub(b, a), a, vect2_neg(dir_v),
 		    vect2_add(thr_v, vect2_set_abs(vect2_norm(dir_v, true),
 		    limit_right)), false)
@@ -1203,8 +1203,8 @@ local function load_rwy_info(arpt_id, fpp)
 		rwy["asda_bbox"] = make_rwy_bbox(thr1_v, dir_v, width,
 		    len + blast2, blast1)
 		rwy["prox_bbox"] = make_rwy_bbox(thr1_v, dir_v,
-		    RAAS_PROXIMITY_LAT_FRACT * width,
-		    len + RAAS_PROXIMITY_LON_DISPL, RAAS_PROXIMITY_LON_DISPL)
+		    RWY_PROXIMITY_LAT_FRACT * width,
+		    len + RWY_PROXIMITY_LON_DISPL, RWY_PROXIMITY_LON_DISPL)
 		rwy["apch_prox_bbox1"] = make_apch_prox_bbox(db_rwys, id1,
 		    thr1_v, width, dir_v, fpp)
 		rwy["apch_prox_bbox2"] = make_apch_prox_bbox(db_rwys, id1,
@@ -1306,7 +1306,7 @@ end
 
 local function acf_vel_vector()
 	return vect2_set_abs(hdg2dir(dr_hdg[0]),
-	    RAAS_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
+	    RWY_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
 end
 
 local function closest_rwy_end(pos, rwy)
@@ -1396,17 +1396,17 @@ local function raas_ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 
 	if point_in_poly(pos_v, prox_bbox) or
 	    not isemptytable(vect2poly_isect(vel_v, pos_v, prox_bbox)) then
-		if raas_apch_rwy_ann[arpt_id .. rwy_id] == nil then
+		if apch_rwy_ann[arpt_id .. rwy_id] == nil then
 			if dr_gs[0] < SPEED_THRESH then
 				local rwy_name = closest_rwy_end(pos_v, rwy)
 				local msg = {"apch"}
 				rwy_id_to_msg(rwy_name, msg)
 				raas_play_msg(msg)
 			end
-			raas_apch_rwy_ann[arpt_id .. rwy_id] = true
+			apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
 	else
-		raas_apch_rwy_ann[arpt_id .. rwy_id] = nil
+		apch_rwy_ann[arpt_id .. rwy_id] = nil
 	end
 end
 
@@ -1450,7 +1450,7 @@ end
 
 local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
-		raas_on_rwy_ann[arpt_id .. rwy_id] = nil
+		on_rwy_ann[arpt_id .. rwy_id] = nil
 		return
 	end
 
@@ -1463,20 +1463,20 @@ local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 		perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	end
 
-	if raas_on_rwy_ann[arpt_id .. rwy_id] == nil then
+	if on_rwy_ann[arpt_id .. rwy_id] == nil then
 		if dr_gs[0] < SPEED_THRESH then
 			perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 		end
-		raas_on_rwy_ann[arpt_id .. rwy_id] = true
+		on_rwy_ann[arpt_id .. rwy_id] = true
 	end
 end
 
 local function stop_check_reset(arpt_id, rwy_id)
 	short_rwy_takeoff_chk = false
-	if raas_accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
-		raas_accel_stop_max_spd[arpt_id .. rwy_id] = nil
-		raas_accel_stop_ann_initial = 0
-		for i, info in pairs(raas_accel_stop_distances) do
+	if accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
+		accel_stop_max_spd[arpt_id .. rwy_id] = nil
+		accel_stop_ann_initial = 0
+		for i, info in pairs(accel_stop_distances) do
 			info["ann"] = false
 		end
 	end
@@ -1507,6 +1507,7 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		return
 	end
 
+--[[
 	if short_rwy_takeoff_chk == false then
 		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 		short_rwy_takeoff_chk = true
@@ -1514,25 +1515,26 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 			raas_play_msg({"short_rwy", "short_rwy"})
 		end
 	end
+	--]]
 
-	maxspd = raas_accel_stop_max_spd[arpt_id .. rwy_id]
+	maxspd = accel_stop_max_spd[arpt_id .. rwy_id]
 	if maxspd == nil or gs > maxspd then
-		raas_accel_stop_max_spd[arpt_id .. rwy_id] = gs
+		accel_stop_max_spd[arpt_id .. rwy_id] = gs
 		maxspd = gs
 	end
 	if gs < maxspd - ACCEL_STOP_SPD_THRESH then
 		local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 
-		if raas_accel_stop_ann_initial == 0 then
+		if accel_stop_ann_initial == 0 then
 			local msg = {}
-			raas_accel_stop_ann_initial = dist
+			accel_stop_ann_initial = dist
 			if dist_to_msg(dist, msg) then
 				msg[#msg + 1] = "rmng"
 				raas_play_msg(msg)
 			end
-		elseif dist < raas_accel_stop_ann_initial - STOP_INIT_DELAY
+		elseif dist < accel_stop_ann_initial - STOP_INIT_DELAY
 		    then
-			for i, info in pairs(raas_accel_stop_distances) do
+			for i, info in pairs(accel_stop_distances) do
 				local min = info["min"]
 				local max = info["max"]
 				local ann = info["ann"]
@@ -1621,29 +1623,29 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		local msg = {}
 
 		-- If we're below 950 ft AFE and haven't annunciated yet
-		if alt < elev + RAAS_APCH_FLAP1_THRESH and
-		    alt > elev + RAAS_APCH_FLAP1_THRESH - RAAS_APCH_ALT_WINDOW
-		    and not raas_air_apch_flap1_ann[arpt_id .. rwy_id] and
+		if alt < elev + RWY_APCH_FLAP1_THRESH and
+		    alt > elev + RWY_APCH_FLAP1_THRESH - RWY_APCH_ALT_WINDOW
+		    and not air_apch_flap1_ann[arpt_id .. rwy_id] and
 		    dr_flaprqst[0] < min_landing_flap then
 			msg[#msg + 1] = "flaps"
 			msg[#msg + 1] = "flaps"
-			raas_air_apch_flap1_ann[arpt_id .. rwy_id] = true
+			air_apch_flap1_ann[arpt_id .. rwy_id] = true
 		end
-		if alt < elev + RAAS_APCH_FLAP2_THRESH and
-		    alt > elev + RAAS_APCH_FLAP2_THRESH - RAAS_APCH_ALT_WINDOW
-		    and not raas_air_apch_flap2_ann[arpt_id .. rwy_id] and
+		if alt < elev + RWY_APCH_FLAP2_THRESH and
+		    alt > elev + RWY_APCH_FLAP2_THRESH - RWY_APCH_ALT_WINDOW
+		    and not air_apch_flap2_ann[arpt_id .. rwy_id] and
 		    dr_flaprqst[0] < min_landing_flap then
 			msg[#msg + 1] = "flaps"
 			msg[#msg + 1] = "flaps"
-			raas_air_apch_flap2_ann[arpt_id .. rwy_id] = true
+			air_apch_flap2_ann[arpt_id .. rwy_id] = true
 		end
 
 		-- If we are below 470 ft AFE and we haven't annunciated yet
-		if alt < elev + RAAS_APCH_ALT_THRESH and
-		    raas_air_apch_rwy_ann[arpt_id .. rwy_id] == nil then
+		if alt < elev + RWY_APCH_ALT_THRESH and
+		    air_apch_rwy_ann[arpt_id .. rwy_id] == nil then
 			-- Don't annunciate if we are too low
-			if alt > elev + RAAS_APCH_ALT_THRESH -
-			    RAAS_APCH_ALT_WINDOW then
+			if alt > elev + RWY_APCH_ALT_THRESH -
+			    RWY_APCH_ALT_WINDOW then
 				if dr_flaprqst[0] >= min_landing_flap then
 					msg[#msg + 1] = "apch"
 
@@ -1657,16 +1659,16 @@ local function raas_air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
 				end
-				raas_air_apch_rwy_ann[arpt_id .. rwy_id] = true
+				air_apch_rwy_ann[arpt_id .. rwy_id] = true
 			end
 		end
 
 		if not isemptytable(msg) then
 			raas_play_msg(msg)
 		end
-	elseif raas_air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
+	elseif air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
 	    not point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) then
-		raas_air_apch_rwy_ann[arpt_id .. rwy_id] = nil
+		air_apch_rwy_ann[arpt_id .. rwy_id] = nil
 	end
 end
 
@@ -1683,11 +1685,11 @@ local function raas_air_runway_approach_arpt(arpt)
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
-	if alt > elev + RAAS_APCH_FLAP1_THRESH + RAAS_APCH_ALT_WINDOW or
-	    alt < elev - RAAS_APCH_ALT_THRESH - RAAS_APCH_ALT_WINDOW then
-		reset_airport_approach_table(raas_air_apch_flap1_ann, arpt_id)
-		reset_airport_approach_table(raas_air_apch_flap2_ann, arpt_id)
-		reset_airport_approach_table(raas_air_apch_rwy_ann, arpt_id)
+	if alt > elev + RWY_APCH_FLAP1_THRESH + RWY_APCH_ALT_WINDOW or
+	    alt < elev - RWY_APCH_ALT_THRESH - RWY_APCH_ALT_WINDOW then
+		reset_airport_approach_table(air_apch_flap1_ann, arpt_id)
+		reset_airport_approach_table(air_apch_flap2_ann, arpt_id)
+		reset_airport_approach_table(air_apch_rwy_ann, arpt_id)
 		return
 	end
 
@@ -1704,7 +1706,7 @@ end
 
 local function raas_air_runway_approach()
 	if not airborne and departed then
-		raas_air_apch_rwy_ann = {}
+		air_apch_rwy_ann = {}
 		return
 	end
 
