@@ -1059,11 +1059,6 @@ local function load_airports_txt()
 	fp:close()
 end
 
-function raas_recreate_apt_cache()
-	logMsg("Recreating X-RAAS_apt_dat.cache")
-	recreate_apt_dat_cache(find_all_apt_dats())
-end
-
 local function recreate_apt_dat_cache(apt_dats)
 	for i, apt_dat_fname in pairs(apt_dats) do
 		map_apt_dat(apt_dat_fname, apt_dat)
