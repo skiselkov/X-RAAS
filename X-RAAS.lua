@@ -210,6 +210,12 @@ local STOP_INIT_DELAY = 300
 local GPA_TOO_HIGH_FACT = 2			-- multiplier
 local GPA_TOO_HIGH_LIMIT = 8			-- degrees
 local BOGUS_THR_ELEV_LIMIT = 500		-- feet
+local STD_BARO_REF = 29.92			-- inches of mercury
+local ALTIMETER_SETTING_TIMEOUT = 4		-- seconds
+local ALTIMETER_SETTING_ALT_CHK_LIMIT = 1500	-- feet
+local ALTIMETER_SETTING_QNH_ERR_LIMIT = 100	-- feet
+local ALTIMETER_SETTING_QFE_ERR_LIMIT = 100	-- feet
+local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -220,6 +226,7 @@ local RWY_APCH_FLAP1_THRESH = 950		-- feet
 local RWY_APCH_FLAP2_THRESH = 600		-- feet
 local RWY_APCH_ALT_THRESH = 470			-- feet
 local RWY_APCH_ALT_WINDOW = 250			-- feet
+local TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 
 local MSG_PRIO_LOW = 1
 local MSG_PRIO_MED = 2
@@ -232,7 +239,7 @@ RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
 RAAS_min_landing_dist = 800			-- meters
 RAAS_accel_stop_dist_cutoff = 3000		-- meters
-RAAS_voice_gender = "female"
+RAAS_voice_female = true
 RAAS_min_landing_flap = 0.5			-- ratio
 RAAS_min_takeoff_flap = 0.1			-- ratio
 RAAS_max_takeoff_flap = 0.75			-- ratio
@@ -265,9 +272,10 @@ RAAS_accel_stop_distances = {
 }
 
 RAAS_too_high_enabled = true
+RAAS_alt_setting_enabled = true
 
-local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_hdg, dr_magvar,
-    dr_nw_offset, dr_flaprqst, dr_gear
+local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
+    dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -292,6 +300,11 @@ local accel_stop_max_spd = {}
 local accel_stop_ann_initial = 0
 local departed = false
 local arriving = false
+
+local TA = 0
+local TL = 0
+local TATL_state = "alt"
+local TATL_transition = -1
 
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
@@ -789,12 +802,15 @@ local function raas_reset()
 	dr_gs = dataref_table("sim/flightmodel/position/groundspeed")
 	dr_lat = dataref_table("sim/flightmodel/position/latitude")
 	dr_lon = dataref_table("sim/flightmodel/position/longitude")
+	dr_elev = dataref_table("sim/flightmodel/position/elevation")
 	dr_hdg = dataref_table("sim/flightmodel/position/true_psi")
 	dr_magvar = dataref_table("sim/flightmodel/position/magnetic_variation")
 	dr_nw_offset = dataref_table("sim/flightmodel/parts/" ..
 	    "tire_z_no_deflection")
 	dr_flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
 	dr_gear = dataref_table("sim/aircraft/parts/acf_gear_deploy")
+	dr_baro_set = dataref_table("sim/cockpit/misc/barometer_setting")
+	dr_baro_sl = dataref_table("sim/weather/barometer_sealevel_inhg")
 
 	raas_start_time = os.time()
 end
@@ -1257,12 +1273,15 @@ local function load_airport(arpt_id)
 	    ["lat"] = lat,
 	    ["lon"] = lon,
 	    ["ecef"] = ecef,
-	    ["elev"] = db_arpt["elev"]
+	    ["elev"] = db_arpt["elev"],
+	    ["TA"] = db_arpt["TA"],
+	    ["TL"] = db_arpt["TL"]
 	}
 	return arpt
 end
 
-local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
+local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list,
+    thresh)
 	local lat_tbl, lon_tbl
 
 	if lat_idx < -80 or lat_idx > 80 then
@@ -1286,13 +1305,13 @@ local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
 
 	for arpt_id, coords in pairs(lon_tbl) do
 		local arpt_pos = sph2ecef(coords)
-		if vect3_abs(vect3_sub(pos, arpt_pos)) < ARPT_LOAD_THRESH then
+		if vect3_abs(vect3_sub(pos, arpt_pos)) < thresh then
 			arpt_list[arpt_id] = coords
 		end
 	end
 end
 
-local function find_nearest_airports(reflat, reflon)
+local function find_nearest_airports(reflat, reflon, thresh)
 	local pos = sph2ecef({reflat, reflon})
 	local ref_lat_idx = geo_table_idx(reflat)
 	local ref_lon_idx = geo_table_idx(reflon)
@@ -1304,7 +1323,7 @@ local function find_nearest_airports(reflat, reflon)
 			local lon_idx = ref_lon_idx + j
 
 			find_nearest_airports_idx(pos, lat_idx, lon_idx,
-			    arpt_list)
+			    arpt_list, thresh)
 		end
 	end
 
@@ -1318,7 +1337,8 @@ local function load_nearest_airports()
 	end
 	last_airport_reload = now
 
-	local new_arpts = find_nearest_airports(dr_lat[0], dr_lon[0])
+	local new_arpts = find_nearest_airports(dr_lat[0], dr_lon[0],
+	    ARPT_LOAD_THRESH)
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		if new_arpts[arpt_id] == nil then
@@ -1486,8 +1506,10 @@ local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 		return
 	end
 
-	if on_rwy_timer ~= -1 and ((now - on_rwy_timer > RAAS_on_rwy_warn_initial and
-	    on_rwy_warnings == 0) or (now - on_rwy_timer - RAAS_on_rwy_warn_initial >
+	if on_rwy_timer ~= -1 and
+	    ((now - on_rwy_timer > RAAS_on_rwy_warn_initial and
+	    on_rwy_warnings == 0) or
+	    (now - on_rwy_timer - RAAS_on_rwy_warn_initial >
 	    on_rwy_warnings * RAAS_on_rwy_warn_repeat)) and
 	    on_rwy_warnings < RAAS_on_rwy_warn_max_n then
 		on_rwy_warnings = on_rwy_warnings + 1
@@ -1805,7 +1827,113 @@ local function air_runway_approach()
 	end
 end
 
+local function find_closest_curarpt()
+	local min_dist = ARPT_LOAD_THRESH
+	local cur_arpt
+	local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
+
+	for arpt_id, arpt in pairs(cur_arpts) do
+		local dist = vect3_abs(vect3_sub(arpt["ecef"], pos_ecef))
+		if dist < min_dist then
+			min_dist = dist
+			cur_arpt = arpt
+		end
+	end
+
+	return cur_arpt
+end
+
 local function altimeter_setting()
+	if not RAAS_alt_setting_enabled then
+		return
+	end
+
+	local cur_arpt = find_closest_curarpt()
+	local field_elev
+
+	if cur_arpt ~= nil then
+		TA = cur_arpt["TA"]
+		TL = cur_arpt["TL"]
+		field_elev = cur_arpt["elev"]
+	else
+		local arpt_ref = XPLMFindNavAid(nil, nil, dr_lat[0],
+		    dr_lono[0], nil, xplm_Nav_Airport)
+		if arpt_ref ~= nil then
+			local outType, outLat, outLon, outHeight, outFreq,
+			    outHdg, outID, outName = XPLMGetNavAidInfo(arpt_ref)
+			local db_arpt = apt_dat[outID]
+			local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
+			local arpt_ecef = sph2ecef({outLat, outLon})
+
+			if db_arpt ~= nil and vect3_abs(vect3_sub(pos_ecef,
+			    arpt_ecef)) < TATL_REMOTE_ARPT_DIST_LIMIT then
+				TA = db_arpt["TA"]
+				TL = db_arpt["TL"]
+				field_elev = cur_arpt["elev"]
+			end
+		end
+	end
+
+	if TL == 0 then
+		if TA ~= 0 then
+			if dr_baro_sl[0] > STD_BARO_REF then
+				TL = TA
+			else
+				local qnh = dr_baro_sl[0] * 33.85
+				TL = TA + 28 * (1013 - qnh)
+			end
+		end
+	end
+	if TA == 0 then
+		TA = TL
+	end
+
+	local elev = m2ft(dr_elev[0])
+
+	if TA ~= 0 and elev > TA and TATL_state == "alt" then
+		TATL_transition = os.time()
+		TATL_state = "fl"
+	end
+	if TL ~= 0 and elev < TA and dr_baro_alt[0] < TL and
+	    TATL_state == "fl" then
+		TATL_transition = os.time()
+		TATL_state = "alt"
+	end
+
+	local now = os.time()
+	if TATL_transition ~= -1 then
+		if  -- We have transitioned into ALT mode
+		    TATL_state == "alt" and
+		    -- The fixed timeout has passed, OR
+		    (now - TATL_transition > ALTIMETER_SETTING_TIMEOUT or
+		    -- The field has a known elelvation and we are within
+		    -- 1500 feet of it
+		    (field_elev and elev) < field_elev +
+		    ALTIMETER_SETTING_ALT_CHK_LIMIT) then
+			local d_qnh = math.abs(elev - dr_baro_alt[0])
+			local d_qfe
+			if field_elev then
+				d_qfe = math.abs(dr_baro_alt[0] -
+				    (elev - field_elev))
+			end
+			if  -- The set baro is out of bounds for QNH, OR
+			    d_qnh > ALTIMETER_SETTING_QNH_ERR_LIMIT and
+			    -- Field elevation is known and the set baro is
+			    -- out of bounds for QFE
+			    (d_qfe and d_qfe > ALTIMETER_SETTING_QFE_ERR_LIMIT)
+			    then
+				raas_play_msg({"alt_set"}, MSG_PRIO_LOW)
+			end
+			TATL_transition = -1
+		elseif TATL_state == "fl" and now - TATL_transition >
+		    ALTIMETER_SETTING_TIMEOUT then
+			local d_ref = math.abs(dr_baro_set[0] - STD_BARO_REF)
+			if d_ref > ALTIMETER_SETTING_BARO_ERR_LIMIT then
+				raas_play_msg({"alt_set"}, MSG_PRIO_LOW)
+			end
+			TATL_transition = -1
+		end
+	end
 end
 
 function raas_exec()
@@ -1864,26 +1992,14 @@ end
 
 function raas_dbg_draw()
 	local graphics = require 'graphics'
-	local nearest_arpt_id = nil
-	local nearest_arpt_dist = ARPT_LOAD_THRESH
+	local cur_arpt = find_closest_curarpt()
 
-	graphics.set_width(2)
-
-	-- locate the nearest airport to us
-	local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
-	for arpt_id, arpt in pairs(cur_arpts) do
-		local dist = vect3_abs(vect3_sub(arpt["ecef"], pos_ecef))
-		if dist < nearest_arpt_dist then
-			nearest_arpt_dist = dist
-			nearest_arpt_id = arpt_id
-		end
-	end
-
-	if nearest_arpt_id == nil then
+	if cur_arpt == nil then
 		return
 	end
 
-	local cur_arpt = cur_arpts[nearest_arpt_id]
+	graphics.set_width(2)
+
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, cur_arpt["fpp"])
 	local vel_v = acf_vel_vector()
 
@@ -1918,9 +2034,17 @@ function raas_dbg_draw()
 end
 
 local function load_msg_table()
+	local voice_dir
+
+	if RAAS_voice_female then
+		voice_dir = "female"
+	else
+		voice_dir = "male"
+	end
+
 	for msgid, msg in pairs(messages) do
 		local fname = SCRIPT_DIRECTORY .. "X-RAAS_msgs" ..
-		    DIRECTORY_SEPARATOR .. RAAS_voice_gender ..
+		    DIRECTORY_SEPARATOR .. voice_dir ..
 		    DIRECTORY_SEPARATOR .. msgid .. ".wav"
 		local snd_f = io.open(fname)
 		local sz = snd_f:seek("end")
