@@ -205,7 +205,7 @@ local RADALT_FLARE_THRESH = 50
 local RAAS_STARTUP_DELAY = 3			-- seconds
 local RWY_DISPLACED_THR_MARGIN = 10
 local ARPT_RELOAD_INTVAL = 10			-- seconds
-local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
+local ARPT_LOAD_LIMIT = 7 * 1852		-- meters, 7nm distance
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
 local GPA_TOO_HIGH_FACT = 1.6			-- multiplier
@@ -239,6 +239,9 @@ local MSG_PRIO_HI = 3
 RAAS_enabled = true
 RAAS_min_engines = 2				-- count
 RAAS_min_mtow = 5700				-- kg
+
+RAAS_debug = 0
+RAAS_debug_graphical = false
 
 RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
@@ -438,7 +441,7 @@ function table.show(t, name, indent)
 	return cart .. autoref
 end
 
-function matrix_mul(x, y, xrows, ycols, sz)
+local function matrix_mul(x, y, xrows, ycols, sz)
 	local z = {}
 
 	for i = 1, sz * ycols do
@@ -457,7 +460,7 @@ function matrix_mul(x, y, xrows, ycols, sz)
 	return z
 end
 
-function split(str, sep)
+local function split(str, sep)
 	local res = {}
 	local s = 1
 	while true do
@@ -472,7 +475,7 @@ function split(str, sep)
 	return res
 end
 
-function rel_hdg(hdg1, hdg2)
+local function rel_hdg(hdg1, hdg2)
 	if hdg1 > hdg2 then
 		if hdg1 > hdg2 + 180 then
 			return 360 - hdg1 + hdg2
@@ -496,15 +499,31 @@ local function ft2m(ft)
 	return ft / 3.281
 end
 
-function vect2_abs(a)
+local function vect2_add(a, b)
+	return {a[1] + b[1], a[2] + b[2]}
+end
+
+local function vect2_sub(a, b)
+	return {a[1] - b[1], a[2] - b[2]}
+end
+
+local function vect2_scmul(a, x)
+	return {a[1] * x, a[2] * x}
+end
+
+local function vect2_dotprod(a, b)
+	return a[1] * b[1] + a[2] * b[2]
+end
+
+local function vect2_abs(a)
 	return math.sqrt((a[1] * a[1]) + (a[2] * a[2]))
 end
 
-function vect2_dist(a, b)
+local function vect2_dist(a, b)
 	return vect2_abs(vect2_sub(a, b))
 end
 
-function vect2_set_abs(a, abs)
+local function vect2_set_abs(a, abs)
 	local oldval = vect2_abs(a)
 	if oldval ~= 0 then
 		return vect2_scmul(a, abs / oldval), oldval
@@ -513,7 +532,7 @@ function vect2_set_abs(a, abs)
 	end
 end
 
-function vect2_unit(a)
+local function vect2_unit(a)
 	local len = vect2_abs(a)
 	if len == 0 then
 		return a, 0
@@ -522,23 +541,7 @@ function vect2_unit(a)
 	end
 end
 
-function vect2_add(a, b)
-	return {a[1] + b[1], a[2] + b[2]}
-end
-
-function vect2_sub(a, b)
-	return {a[1] - b[1], a[2] - b[2]}
-end
-
-function vect2_scmul(a, x)
-	return {a[1] * x, a[2] * x}
-end
-
-function vect2_dotprod(a, b)
-	return a[1] * b[1] + a[2] * b[2]
-end
-
-function vect2_norm(v, right)
+local function vect2_norm(v, right)
 	if right then
 		return {v[2], -v[1]}
 	else
@@ -835,6 +838,7 @@ local function raas_reset()
 	raas_start_time = os.time()
 end
 
+-- Given a runway ID, returns the reciprical runway ID.
 local function recip_rwy_id(rwy_id)
 	local num = tonumber(rwy_id:sub(1, 2))
 	local recip_num = num + 18
@@ -861,6 +865,9 @@ local function recip_rwy_id(rwy_id)
 	return recip
 end
 
+-- Given a runway threshold vector, direction vector, width, length and
+-- threshold longitudinal displacement, prepares a bounding box which
+-- encompasses that runway.
 local function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	local a, b, c, d, len_displ_v
 
@@ -886,7 +893,10 @@ local function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	return {a, b, c, d}
 end
 
-local function map_apt_dat(apt_dat_fname, apt_dats)
+-- Parses an apt.dat (or X-RAAS_apt_dat.cache) file, parses its contents
+-- and reconstructs our apt_dat table. This is called at the start of
+-- X-RAAS to populate the airport and runway database. The 
+local function map_apt_dat(apt_dat_fname)
 	apt_dat_f = io.open(apt_dat_fname)
 	if apt_dat_f == nil then
 		return 0
@@ -979,6 +989,10 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 	return arpt_cnt
 end
 
+-- Locates all apt.dat files used by X-Plane to display scenery. It consults
+-- scenery_packs.ini to determine which scenery packs are currently enabled
+-- and together with the default apt.dat returns them in a list sorted
+-- numerically in preference order (lowest index for highest priority).
 local function find_all_apt_dats()
 	local apt_dats = {}
 
@@ -1006,6 +1020,10 @@ local function find_all_apt_dats()
 	return apt_dats
 end
 
+-- Reloads the Custom Data/GNS430/navdata/Airports.txt and populates our
+-- apt_dat airports with the latest info in it, notably:
+-- *) transition altitudes & transition levels for the airports
+-- *) runway threshold elevation, glide path angle & threshold crossing height
 local function load_airports_txt()
 	local airports_fname = RAAS_xpdir .. "Custom Data" ..
 	    DIRECTORY_SEPARATOR .. "GNS430" .. DIRECTORY_SEPARATOR ..
@@ -1059,12 +1077,17 @@ local function load_airports_txt()
 	fp:close()
 end
 
-local function recreate_apt_dat_cache(apt_dats)
-	for i, apt_dat_fname in pairs(apt_dats) do
-		map_apt_dat(apt_dat_fname, apt_dat)
+-- Takes the current state of the apt_dat table and writes all the airports
+-- in it to the X-RAAS_apt_dat.cache so that a subsequent run of X-RAAS can
+-- pick this info up.
+local function recreate_apt_dat_cache(apt_dat_files)
+	-- First scan all the provided apt.dat files
+	for i = 1, #apt_dat_files do
+		map_apt_dat(apt_dat_files[i])
 	end
 	load_airports_txt()
 
+	-- And rewrite the cache file
 	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY ..
 	    "X-RAAS_apt_dat.cache", "w")
 	for icao, arpt in pairs(apt_dat) do
@@ -1097,6 +1120,8 @@ local function recreate_apt_dat_cache(apt_dats)
 	apt_dat_cache_f:close()
 end
 
+-- Scans the cached copy of X-RAAS_apt_dat.cache and if it doesn't exist,
+-- recreates the cache from raw X-Plane navigational and scenery data.
 local function map_apt_dats()
 	if map_apt_dat(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat.cache", apt_dat) == 0
 	    then
@@ -1105,7 +1130,8 @@ local function map_apt_dats()
 end
 
 --[[
-The approach proximity bounding box is constructed as follows:
+  The approach proximity bounding box is constructed as follows:
+
     5500 meters
     |<------->|
     |         |
@@ -1120,8 +1146,11 @@ The approach proximity bounding box is constructed as follows:
     |      _- b
     |   _-.
   a +--    (b1)
+
   If there is another parallel runway, we make sure our bounding boxes
-  don't overlap.
+  don't overlap. We do this by introducing two additional points, b1 and
+  c1, in between a and b or c and d respectively. We essentially shear
+  the overlapping excess from the bounding polygon.
 --]]
 local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 	local x, a, b, b1, c, c1, d
@@ -1196,6 +1225,10 @@ local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 	return bbox
 end
 
+-- Given an airport ID and an airport flat plane transform, loads the
+-- runway info stored in the apt_dat database into a more easily workable
+-- (but more verbose in terms of used memory) format. This function also
+-- constructs the transformed threshold coordinates and bounding boxes.
 local function load_rwy_info(arpt_id, fpp)
 	local rwys = {}
 	local db_arpt = apt_dat[arpt_id]
@@ -1279,6 +1312,10 @@ local function load_rwy_info(arpt_id, fpp)
 	return rwys
 end
 
+-- Given an airport, loads the information of the airport into a more readily
+-- workable (but more verbose) format. This function prepares a flat plane
+-- transform centered on the airport's reference point and pre-computes all
+-- relevant points for the airport in that space.
 local function load_airport(arpt_id)
 	local db_arpt = apt_dat[arpt_id]
 	local lat = db_arpt["lat"]
@@ -1299,8 +1336,9 @@ local function load_airport(arpt_id)
 	return arpt
 end
 
-local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list,
-    thresh)
+-- The actual worker function for find_nearest_airports. Performs the search
+-- in a specified airport_geo_table square. Position is a 3-space ECEF vector.
+local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
 	local lat_tbl, lon_tbl
 
 	if lat_idx < -80 or lat_idx > 80 then
@@ -1324,13 +1362,17 @@ local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list,
 
 	for arpt_id, coords in pairs(lon_tbl) do
 		local arpt_pos = sph2ecef(coords)
-		if vect3_abs(vect3_sub(pos, arpt_pos)) < thresh then
+		if vect3_abs(vect3_sub(pos, arpt_pos)) < ARPT_LOAD_LIMIT then
 			arpt_list[arpt_id] = coords
 		end
 	end
 end
 
-local function find_nearest_airports(reflat, reflon, thresh)
+-- Locates all airports within an ARPT_LOAD_LIMIT distance limit (in meters)
+-- of a geographic reference position. The airports are searched for in the
+-- apt_dat database and this function returns a table of airport IDs which
+-- matched the search.
+local function find_nearest_airports(reflat, reflon)
 	local pos = sph2ecef({reflat, reflon})
 	local ref_lat_idx = geo_table_idx(reflat)
 	local ref_lon_idx = geo_table_idx(reflon)
@@ -1342,13 +1384,17 @@ local function find_nearest_airports(reflat, reflon, thresh)
 			local lon_idx = ref_lon_idx + j
 
 			find_nearest_airports_idx(pos, lat_idx, lon_idx,
-			    arpt_list, thresh)
+			    arpt_list)
 		end
 	end
 
 	return arpt_list
 end
 
+-- Locates any airports within a 7NM radius of the aircraft and loads
+-- their RAAS data from the apt_dat database. The function then updates
+-- cur_arpts with the new information and expunges airports that are no
+-- longer in range.
 local function load_nearest_airports()
 	local now = os.time()
 	if now - last_airport_reload < ARPT_RELOAD_INTVAL then
@@ -1356,8 +1402,7 @@ local function load_nearest_airports()
 	end
 	last_airport_reload = now
 
-	local new_arpts = find_nearest_airports(dr_lat[0], dr_lon[0],
-	    ARPT_LOAD_THRESH)
+	local new_arpts = find_nearest_airports(dr_lat[0], dr_lon[0])
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		if new_arpts[arpt_id] == nil then
@@ -1371,11 +1416,16 @@ local function load_nearest_airports()
 	end
 end
 
+-- Computes the aircraft's on-ground velocity vector. The length of the
+-- vector is computed as a 2-second extra ahead of the actual aircraft's
+-- nosewheel position.
 local function acf_vel_vector()
 	return vect2_set_abs(hdg2dir(dr_hdg[0]),
 	    RWY_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
 end
 
+-- Determines which of two ends of a runway is closer to the aircraft's
+-- current position.
 local function closest_rwy_end(pos, rwy)
 	if vect2_abs(vect2_sub(pos, {rwy["t1x"], rwy["t1y"]})) <
 	    vect2_abs(vect2_sub(pos, {rwy["t2x"], rwy["t2y"]})) then
@@ -1385,6 +1435,9 @@ local function closest_rwy_end(pos, rwy)
 	end
 end
 
+-- Translates a runway identifier into a suffix suitable for passing to
+-- raas_play_msg for announcing whether the runway is left, center or right.
+-- If no suffix is present, returns nil.
 local function rwy_lcr_msg(str)
 	local lcr
 	if #str < 3 then
@@ -1401,12 +1454,16 @@ local function rwy_lcr_msg(str)
 	return nil
 end
 
+-- Given a runway ID, appends appropriate messages suitable for raas_play_msg
+-- to say it out loud.
 local function rwy_id_to_msg(rwy_id, msg)
 	msg[#msg + 1] = rwy_id:sub(1, 1)
 	msg[#msg + 1] = rwy_id:sub(2, 2)
 	msg[#msg + 1] = rwy_lcr_msg(rwy_id)
 end
 
+-- Given a distance in meters, converts it into a message suitable for
+-- raas_play_msg based on the user's current imperial/metric settings.
 local function dist_to_msg(dist, msg)
 	if RAAS_use_imperial then
 		local dist_ft = dist * 3.281
@@ -1859,9 +1916,9 @@ local function air_runway_approach()
 end
 
 local function find_closest_curarpt()
-	local min_dist = ARPT_LOAD_THRESH
-	local cur_arpt
+	local min_dist = ARPT_LOAD_LIMIT
 	local pos_ecef = sph2ecef({dr_lat[0], dr_lon[0]})
+	local cur_arpt
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		local dist = vect3_abs(vect3_sub(arpt["ecef"], pos_ecef))
@@ -2236,6 +2293,6 @@ do_often('raas_exec()')
 do_every_draw('raas_snd_sched()')
 
 -- Uncomment the line below to get a nice debug display
-if RAAS_debug then
+if RAAS_debug_graphical then
 	do_every_draw('raas_dbg_draw()')
 end
