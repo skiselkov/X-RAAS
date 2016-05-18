@@ -2195,7 +2195,7 @@ if not RAAS_enabled then
 elseif dr_num_engines[0] < RAAS_min_engines or dr_mtow[0] < RAAS_min_mtow then
 	logMsg("X-RAAS: DISABLED (" .. dr_ICAO[0] .. "; engines " ..
 	    dr_num_engines[0] .. "/" .. RAAS_min_engines .. "; MTOW: " ..
-	    dr_mtow[0] .. "/" .. RAAS_min_mtow .. ")")
+	    math.floor(dr_mtow[0]) .. "/" .. RAAS_min_mtow .. ")")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
