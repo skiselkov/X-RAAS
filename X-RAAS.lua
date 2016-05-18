@@ -227,6 +227,7 @@ local RWY_APCH_FLAP2_THRESH = 600		-- feet
 local RWY_APCH_ALT_THRESH = 470			-- feet
 local RWY_APCH_ALT_WINDOW = 250			-- feet
 local TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
+local MIN_BUS_VOLT = 11				-- Volts
 
 local MSG_PRIO_LOW = 1
 local MSG_PRIO_MED = 2
@@ -275,7 +276,8 @@ RAAS_too_high_enabled = true
 RAAS_alt_setting_enabled = true
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
-    dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl
+    dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
+    dr_ext_view, dr_bus_volt, dr_avionics_on
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -316,6 +318,7 @@ local messages = {
 	["unstable"] = {}
 }
 local cur_msg = {}
+local view_is_ext = false
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -811,6 +814,9 @@ local function raas_reset()
 	dr_gear = dataref_table("sim/aircraft/parts/acf_gear_deploy")
 	dr_baro_set = dataref_table("sim/cockpit/misc/barometer_setting")
 	dr_baro_sl = dataref_table("sim/weather/barometer_sealevel_inhg")
+	dr_ext_view = dataref_table("sim/graphics/view/view_is_external")
+	dr_bus_volt = dataref_table("sim/cockpit2/electrical/bus_volts")
+	dr_avionics_on = dataref_table("sim/cockpit/electrical/avionics_on")
 
 	raas_start_time = os.time()
 end
@@ -1944,6 +1950,10 @@ function raas_exec()
 		return
 	end
 
+	if dr_bus_volt[0] < MIN_BUS_VOLT or dr_avionics_on[0] ~= 1 then
+		return
+	end
+
 	load_nearest_airports(nil)
 
 	-- the '10' addition here is for hysteresis
@@ -1994,7 +2004,8 @@ function raas_dbg_draw()
 	local graphics = require 'graphics'
 	local cur_arpt = find_closest_curarpt()
 
-	if cur_arpt == nil then
+	if cur_arpt == nil or dr_bus_volt[0] < MIN_BUS_VOLT or
+	    dr_avionics_on[0] ~= 1 then
 		return
 	end
 
@@ -2075,9 +2086,40 @@ function raas_play_msg(msg, prio)
 	cur_msg["prio"] = prio
 end
 
+local function set_sound_on(flag)
+	local val
+	if flag then
+		val = 1
+	else
+		val = 0.001
+	end
+	for i, msg in pairs(messages) do
+		set_sound_gain(msg["snd"], val)
+	end
+end
+
 -- This is the sound scheduling loop.
 function raas_snd_sched()
 	if isemptytable(cur_msg) then
+		return
+	end
+
+	-- Make sure our messages are only audible when we're inside
+	-- the cockpit and AC power is on
+	if view_is_ext and dr_ext_view[0] == 0 then
+		set_sound_on(true)
+		view_is_ext = false
+	elseif not view_is_ext and dr_ext_view[0] == 1 then
+		set_sound_on(false)
+		view_is_ext = true
+	end
+
+	-- stop audio when power is down
+	if dr_bus_volt[0] < MIN_BUS_VOLT or dr_avionics_on[0] ~= 1 then
+		if cur_msg["snd"] ~= nil then
+			stop_sound(cur_msg["snd"])
+		end
+		cur_msg = {}
 		return
 	end
 
