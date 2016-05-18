@@ -163,7 +163,7 @@ RAAS advisories:
 	16) Too fast on approach
 	    Message: "TOO FAST! TOO FAST!" or "UNSTABLE! UNSTABLE!"
 	    Conditions:
-		*) TBD
+		*) <WON'T IMPLEMENT>
 
 	17) Nearing runway end
 	    Message: "100 HUNDRED REMAINING"
@@ -194,6 +194,7 @@ RAAS advisories:
 
 local HDG_ALIGN_THRESH = 25			-- degrees
 local SPEED_THRESH = 20.5			-- m/s, 40 knots
+local SLOW_ROLL_THRESH = 5.15			-- m/s, 10 knots
 local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
 local RWY_PROXIMITY_LAT_FRACT = 3
@@ -216,6 +217,7 @@ local ALTIMETER_SETTING_ALT_CHK_LIMIT = 1500	-- feet
 local ALTIMETER_SETTING_QNH_ERR_LIMIT = 100	-- feet
 local ALTIMETER_SETTING_QFE_ERR_LIMIT = 100	-- feet
 local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
+local IMMEDIATE_STOP_DIST = 50			-- meters
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -235,6 +237,8 @@ local MSG_PRIO_HI = 3
 
 -- config stuff (to be overridden by acf)
 RAAS_enabled = true
+RAAS_min_engines = 2				-- count
+RAAS_min_mtow = 5700				-- kg
 
 RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
@@ -275,9 +279,14 @@ RAAS_accel_stop_distances = {
 RAAS_too_high_enabled = true
 RAAS_alt_setting_enabled = true
 
+-- DO NOT CHANGE THIS!
+RAAS_xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
+    DIRECTORY_SEPARATOR .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
+    DIRECTORY_SEPARATOR
+
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
     dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
-    dr_ext_view, dr_bus_volt, dr_avionics_on
+    dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines, dr_mtow
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -310,7 +319,7 @@ local TATL_transition = -1
 
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
-	["5"] = {}, ["6"] = {}, ["7"] = {}, ["8"] = {}, ["9"] = {},
+	["5"] = {}, ["6"] = {}, ["7"] = {}, ["8"] = {}, ["9"] = {}, ["30"] = {},
 	["alt_set"] = {}, ["apch"] = {}, ["caution"] = {}, ["flaps"] = {},
 	["hundred"] = {}, ["left"] = {}, ["long_land"] = {}, ["on_rwy"] = {},
 	["on_twy"] = {}, ["right"] = {}, ["rmng"] = {}, ["short_rwy"] = {},
@@ -818,6 +827,11 @@ local function raas_reset()
 	dr_bus_volt = dataref_table("sim/cockpit2/electrical/bus_volts")
 	dr_avionics_on = dataref_table("sim/cockpit/electrical/avionics_on")
 
+	dr_num_engines = dataref_table("sim/aircraft/engine/acf_num_engines")
+	dr_mtow = dataref_table("sim/aircraft/weight/acf_m_max")
+
+	dr_ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
+
 	raas_start_time = os.time()
 end
 
@@ -890,12 +904,12 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 		if line:find("1 ") == 1 then
 			local comps = split(line, " ")
 			local new_icao = comps[5]
-			local TA, TL = 0, 0
+			local thisTA, thisTL = 0, 0
 
 			if #comps >= 7 and comps[6]:find("TA:") == 1 and
 			    comps[7]:find("TL:") == 1 then
-				TA = tonumber(comps[6])
-				TL = tonumber(comps[7])
+				thisTA = tonumber(comps[6]:sub(4))
+				thisTL = tonumber(comps[7]:sub(4))
 			end
 
 			if icao ~= nil and isemptytable(apt["rwys"]) then
@@ -913,8 +927,8 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 				apt = {
 				    ["elev"] = tonumber(comps[2]),
 				    ["rwys"] = {},
-				    ["TA"] = TA,
-				    ["TL"] = TL
+				    ["TA"] = thisTA,
+				    ["TL"] = thisTL
 				}
 				icao = new_icao
 				apt_dat[icao] = apt
@@ -965,36 +979,37 @@ local function map_apt_dat(apt_dat_fname, apt_dats)
 	return arpt_cnt
 end
 
-local function find_all_apt_dats(xpdir)
+local function find_all_apt_dats()
 	local apt_dats = {}
 
-	local scenery_packs_ini = io.open(xpdir ..
+	local scenery_packs_ini = io.open(RAAS_xpdir ..
 	    "Custom Scenery" .. DIRECTORY_SEPARATOR .. "scenery_packs.ini")
 
 	if scenery_packs_ini ~= nil then
 		for line in scenery_packs_ini:lines() do
 			if line:find("SCENERY_PACK ") == 1 then
 				local scn_name = line:sub(13)
-				apt_dats[#apt_dats + 1] = xpdir .. scn_name ..
-				    DIRECTORY_SEPARATOR .. "Earth nav data" ..
-				    DIRECTORY_SEPARATOR .. "apt.dat"
+				apt_dats[#apt_dats + 1] = RAAS_xpdir ..
+				    scn_name .. DIRECTORY_SEPARATOR ..
+				    "Earth nav data" .. DIRECTORY_SEPARATOR ..
+				    "apt.dat"
 			end
 		end
 		io.close(scenery_packs_ini)
 	end
 
-	apt_dats[#apt_dats + 1] = xpdir .. "Resources" .. DIRECTORY_SEPARATOR ..
-	    "default scenery" .. DIRECTORY_SEPARATOR .. "default apt dat" ..
-	    DIRECTORY_SEPARATOR .. "Earth nav data" .. DIRECTORY_SEPARATOR ..
-	    "apt.dat"
+	apt_dats[#apt_dats + 1] = RAAS_xpdir .. "Resources" ..
+	    DIRECTORY_SEPARATOR .. "default scenery" .. DIRECTORY_SEPARATOR ..
+	    "default apt dat" .. DIRECTORY_SEPARATOR .. "Earth nav data" ..
+	    DIRECTORY_SEPARATOR .. "apt.dat"
 
 	return apt_dats
 end
 
-local function load_airports_txt(xpdir)
-	local airports_fname = xpdir .. "Custom Data" .. DIRECTORY_SEPARATOR ..
-	    "GNS430" .. DIRECTORY_SEPARATOR .. "navdata" ..
-	    DIRECTORY_SEPARATOR .. "Airports.txt"
+local function load_airports_txt()
+	local airports_fname = RAAS_xpdir .. "Custom Data" ..
+	    DIRECTORY_SEPARATOR .. "GNS430" .. DIRECTORY_SEPARATOR ..
+	    "navdata" .. DIRECTORY_SEPARATOR .. "Airports.txt"
 	local fp = io.open(airports_fname)
 	local last_arpt = nil
 
@@ -1044,11 +1059,16 @@ local function load_airports_txt(xpdir)
 	fp:close()
 end
 
-local function recreate_apt_dat_cache(xpdir, apt_dats)
+function raas_recreate_apt_cache()
+	logMsg("Recreating X-RAAS_apt_dat.cache")
+	recreate_apt_dat_cache(find_all_apt_dats())
+end
+
+local function recreate_apt_dat_cache(apt_dats)
 	for i, apt_dat_fname in pairs(apt_dats) do
 		map_apt_dat(apt_dat_fname, apt_dat)
 	end
-	load_airports_txt(xpdir)
+	load_airports_txt()
 
 	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY ..
 	    "X-RAAS_apt_dat.cache", "w")
@@ -1082,12 +1102,10 @@ local function recreate_apt_dat_cache(xpdir, apt_dats)
 	apt_dat_cache_f:close()
 end
 
-local function map_apt_dats(xpdir)
-	local apt_dats = find_all_apt_dats(xpdir)
-
+local function map_apt_dats()
 	if map_apt_dat(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat.cache", apt_dat) == 0
 	    then
-		recreate_apt_dat_cache(xpdir, apt_dats)
+		recreate_apt_dat_cache(find_all_apt_dats())
 	end
 end
 
@@ -1412,7 +1430,7 @@ local function dist_to_msg(dist, msg)
 			msg[#msg + 1] = "1"
 			msg[#msg + 1] = "hundred"
 		else
-			return false
+			msg[#msg + 1] = "0"
 		end
 	else
 		local dist_300incr = math.floor(dist / 300) * 300
@@ -1435,8 +1453,10 @@ local function dist_to_msg(dist, msg)
 				msg[#msg + 1] = "1"
 				msg[#msg + 1] = "hundred"
 			end
+		elseif dist >= 30 then
+			msg[#msg + 1] = "30"
 		else
-			return false
+			msg[#msg + 1] = "0"
 		end
 	end
 
@@ -1590,15 +1610,25 @@ end
 local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	local gs = dr_gs[0]
 	local maxspd
+	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+	local rhdg = math.abs(rel_hdg(hdg, rwy_hdg))
+
 	if gs < SPEED_THRESH then
-		stop_check_reset(arpt_id, rwy_id)
-		return
-	end
-	if math.abs(rel_hdg(hdg, rwy_hdg)) > HDG_ALIGN_THRESH then
+		-- If there's very little runway remaining, we always want to
+		-- call that fact out
+		if dist < IMMEDIATE_STOP_DIST and rhdg < HDG_ALIGN_THRESH and
+		    gs > SLOW_ROLL_THRESH then
+			perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v,
+			    msg)
+		else
+			stop_check_reset(arpt_id, rwy_id)
+		end
 		return
 	end
 
-	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
+	if rhdg > HDG_ALIGN_THRESH then
+		return
+	end
 
 	if dr_rad_alt[0] > RADALT_GRD_THRESH then
 		stop_check_reset(arpt_id, rwy_id)
@@ -2162,23 +2192,22 @@ local function load_configs()
 end
 
 load_configs()
+raas_reset()
 
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
+	return
+elseif dr_num_engines[0] < RAAS_min_engines or dr_mtow[0] < RAAS_min_mtow then
+	logMsg("X-RAAS: DISABLED (" .. dr_ICAO[0] .. "; engines " ..
+	    dr_num_engines[0] .. "/" .. RAAS_min_engines .. "; MTOW: " ..
+	    dr_mtow[0] .. "/" .. RAAS_min_mtow .. ")")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
 end
 
 load_msg_table()
-raas_reset()
-
-local xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
-    DIRECTORY_SEPARATOR .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
-    DIRECTORY_SEPARATOR
-
-map_apt_dats(xpdir)
-load_airports_txt(xpdir)
+map_apt_dats()
 
 local nav_ref = XPLMGetFirstNavAid()
 while nav_ref ~= XPLM_NAV_NOT_FOUND do
