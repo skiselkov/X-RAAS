@@ -230,6 +230,7 @@ local RWY_APCH_ALT_THRESH = 470			-- feet
 local RWY_APCH_ALT_WINDOW = 250			-- feet
 local TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 local MIN_BUS_VOLT = 11				-- Volts
+local XRAAS_BUS_LOAD_AMPS = 2			-- Amps
 
 local MSG_PRIO_LOW = 1
 local MSG_PRIO_MED = 2
@@ -289,7 +290,8 @@ RAAS_xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
     dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
-    dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines, dr_mtow
+    dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines, dr_mtow,
+    dr_eng_gen, dr_apu_gen, dr_plug_bus_load
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -331,6 +333,7 @@ local messages = {
 }
 local cur_msg = {}
 local view_is_ext = false
+local bus_loaded = -1
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -829,11 +832,13 @@ local function raas_reset()
 	dr_ext_view = dataref_table("sim/graphics/view/view_is_external")
 	dr_bus_volt = dataref_table("sim/cockpit2/electrical/bus_volts")
 	dr_avionics_on = dataref_table("sim/cockpit/electrical/avionics_on")
-
 	dr_num_engines = dataref_table("sim/aircraft/engine/acf_num_engines")
 	dr_mtow = dataref_table("sim/aircraft/weight/acf_m_max")
-
 	dr_ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
+	dr_eng_gen = dataref_table("sim/cockpit/electrical/generator_on")
+	dr_apu_gen = dataref_table("sim/cockpit/electrical/generator_apu_on")
+	dr_plug_bus_load = dataref_table("sim/cockpit2/electrical/" ..
+	    "plugin_bus_load_amps")
 
 	raas_start_time = os.time()
 end
@@ -2024,6 +2029,53 @@ local function altimeter_setting()
 	end
 end
 
+local function xfer_elec_bus(busnr)
+	local xbusnr = (busnr + 1) % 2
+	if bus_loaded == xbusnr then
+		dr_plug_bus_load[xbusnr] = dr_plug_bus_load[xbusnr] -
+		    XRAAS_BUS_LOAD_AMPS
+		bus_loaded = -1
+	end
+	if bus_loaded == -1 then
+		dr_plug_bus_load[busnr] = dr_plug_bus_load[busnr] +
+		    XRAAS_BUS_LOAD_AMPS
+		bus_loaded = busnr
+	end
+end
+
+-- Returns true if X-RAAS has electrical power from the aircraft.
+local function raas_is_on()
+	local gen_on = false
+	local turned_on
+
+	for i = 0, dr_num_engines[0] - 1 do
+		if dr_eng_gen[i] ~= 0 then
+			gen_on = true
+			break
+		end
+	end
+	if dr_apu_gen[0] ~= 0 then
+		gen_on = true
+	end
+
+	turned_on = (gen_on and (dr_bus_volt[0] > MIN_BUS_VOLT or
+	    dr_bus_volt[1] > MIN_BUS_VOLT) and dr_avionics_on[0] == 1)
+
+	if turned_on then
+		if dr_bus_volt[0] < MIN_BUS_VOLT then
+			xfer_elec_bus(1)
+		else
+			xfer_elec_bus(0)
+		end
+	elseif bus_loaded ~= -1 then
+		dr_plug_bus_load[bus_loaded] = dr_plug_bus_load[bus_loaded] -
+		    XRAAS_BUS_LOAD_AMPS
+		bus_loaded = -1
+	end
+
+	return turned_on
+end
+
 function raas_exec()
 	-- Before we start, wait a set delay, because X-Plane's datarefs
 	-- needed for proper init are unstable, so we'll give them an
@@ -2032,8 +2084,7 @@ function raas_exec()
 		return
 	end
 
-	if (dr_bus_volt[0] < MIN_BUS_VOLT and dr_bus_volt[1] < MIN_BUS_VOLT) or
-	    dr_avionics_on[0] ~= 1 then
+	if not raas_is_on() then
 		return
 	end
 
@@ -2084,11 +2135,14 @@ local function draw_bbox(bbox)
 end
 
 function raas_dbg_draw()
+	if not raas_is_on() then
+		return
+	end
+
 	local graphics = require 'graphics'
 	local cur_arpt = find_closest_curarpt()
 
-	if cur_arpt == nil or dr_bus_volt[0] < MIN_BUS_VOLT or
-	    dr_avionics_on[0] ~= 1 then
+	if not cur_arpt then
 		return
 	end
 
@@ -2198,7 +2252,7 @@ function raas_snd_sched()
 	end
 
 	-- stop audio when power is down
-	if dr_bus_volt[0] < MIN_BUS_VOLT or dr_avionics_on[0] ~= 1 then
+	if not raas_is_on() then
 		if cur_msg["snd"] ~= nil then
 			stop_sound(cur_msg["snd"])
 		end
