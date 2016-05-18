@@ -2032,7 +2032,8 @@ function raas_exec()
 		return
 	end
 
-	if dr_bus_volt[0] < MIN_BUS_VOLT or dr_avionics_on[0] ~= 1 then
+	if (dr_bus_volt[0] < MIN_BUS_VOLT and dr_bus_volt[1] < MIN_BUS_VOLT) or
+	    dr_avionics_on[0] ~= 1 then
 		return
 	end
 
