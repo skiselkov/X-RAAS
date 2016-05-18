@@ -207,7 +207,7 @@ local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_THRESH = 7 * 1852		-- 7nm
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
-local GPA_TOO_HIGH_FACT = 2			-- multiplier
+local GPA_TOO_HIGH_FACT = 1.6			-- multiplier
 local GPA_TOO_HIGH_LIMIT = 8			-- degrees
 local BOGUS_THR_ELEV_LIMIT = 500		-- feet
 local STD_BARO_REF = 29.92			-- inches of mercury
@@ -1857,7 +1857,7 @@ local function altimeter_setting()
 		field_elev = cur_arpt["elev"]
 	else
 		local arpt_ref = XPLMFindNavAid(nil, nil, dr_lat[0],
-		    dr_lono[0], nil, xplm_Nav_Airport)
+		    dr_lon[0], nil, xplm_Nav_Airport)
 		if arpt_ref ~= nil then
 			local outType, outLat, outLon, outHeight, outFreq,
 			    outHdg, outID, outName = XPLMGetNavAidInfo(arpt_ref)
@@ -1869,7 +1869,7 @@ local function altimeter_setting()
 			    arpt_ecef)) < TATL_REMOTE_ARPT_DIST_LIMIT then
 				TA = db_arpt["TA"]
 				TL = db_arpt["TL"]
-				field_elev = cur_arpt["elev"]
+				field_elev = db_arpt["elev"]
 			end
 		end
 	end
@@ -2051,9 +2051,10 @@ local function load_msg_table()
 
 		snd_f:close()
 		msg["snd"] = load_WAV_file(fname)
-		-- all our sound files are mono, 16-bit, 44.1 kHz, so simply
-		-- estimate the length based on file size
-		msg["dur"] = (sz - 44) / 2 / 44100
+		-- all our sound files are mono, 16-bit, 22.05 kHz, so simply
+		-- estimate the length based on file size (44 bytes is the
+		-- RIFF header)
+		msg["dur"] = (sz - 44) / 2 / 22050
 	end
 end
 
