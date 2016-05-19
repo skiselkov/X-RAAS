@@ -234,7 +234,7 @@ local XRAAS_BUS_LOAD_AMPS = 2			-- Amps
 
 local MSG_PRIO_LOW = 1
 local MSG_PRIO_MED = 2
-local MSG_PRIO_HI = 3
+local MSG_PRIO_HIGH = 3
 
 -- config stuff (to be overridden by acf)
 RAAS_enabled = true
@@ -1630,7 +1630,8 @@ local function takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 	short_rwy_takeoff_chk = true
 	if dist < RAAS_min_takeoff_dist then
-		raas_play_msg({"short_rwy", "short_rwy"}, MSG_PRIO_HI)
+		raas_play_msg({"caution", "short_rwy", "short_rwy"},
+		    MSG_PRIO_HIGH)
 	end
 end
 
@@ -1699,7 +1700,7 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 					if dist_to_msg(dist, msg) then
 						msg[#msg + 1] = "rmng"
 					end
-					raas_play_msg(msg, MSG_PRIO_HI)
+					raas_play_msg(msg, MSG_PRIO_HIGH)
 				else
 					perform_rwy_dist_remaining_callouts(
 					    opp_thr_v, pos_v)
@@ -1782,7 +1783,7 @@ local function ground_on_runway_aligned()
 		if not on_twy_ann then
 			on_twy_ann = true
 			raas_play_msg({"caution", "on_twy", "on_twy"},
-			    MSG_PRIO_HI)
+			    MSG_PRIO_HIGH)
 		end
 	elseif dr_gs[0] < SPEED_THRESH or
 	    dr_rad_alt[0] >= RADALT_GRD_THRESH then
@@ -1858,7 +1859,7 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 				    then
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
-					msg_prio = MSG_PRIO_HI
+					msg_prio = MSG_PRIO_HIGH
 				else
 					msg[#msg + 1] = "apch"
 
@@ -2029,6 +2030,7 @@ local function altimeter_setting()
 	end
 end
 
+-- Transfers our electrical load to bus number `busnr' (numbered from 0)
 local function xfer_elec_bus(busnr)
 	local xbusnr = (busnr + 1) % 2
 	if bus_loaded == xbusnr then
