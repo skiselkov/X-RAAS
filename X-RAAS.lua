@@ -15,7 +15,6 @@ RAAS advisories:
 		   airport and airport is not indicated as QFE (in database),
 		   altimeter setting is not QFE and QFE program pin is not
 		   selected
-		*) Height above field is less than 5000 feet
 		*) Radio Height is greater than 600 feet
 		*) The difference between Corrected Altitude and GPS Altitude
 		   exceeds a threshold computed by EGPWS
@@ -156,7 +155,7 @@ RAAS advisories:
 	    Message: "XXXX THOUSAND/HUNDRED REMAINING"
 	    Conditions:
 		*) Max ground speed attained above 40 knots
-		*) Decelerated 7 knots below max ground speed
+		*) Decelerated 5 knots below max ground speed
 		*) Aircraft on last half of runway
 		*) Ground speed above 40 knots
 
@@ -201,15 +200,15 @@ local RWY_PROXIMITY_LAT_FRACT = 3
 local RWY_PROXIMITY_LON_DISPL = 457		-- meters, 1500 ft
 local RWY_PROXIMITY_TIME_FACT = 2		-- seconds
 local LANDING_ROLLOUT_TIME_FACT = 1		-- seconds
-local RADALT_GRD_THRESH = 5
-local RADALT_FLARE_THRESH = 50
-local RAAS_STARTUP_DELAY = 3			-- seconds
-local RWY_DISPLACED_THR_MARGIN = 10
+local RADALT_GRD_THRESH = 5			-- feet
+local RADALT_FLARE_THRESH = 50			-- feet
+local RAAS_STARTUP_DELAY = 10			-- seconds
+local RWY_DISPLACED_THR_MARGIN = 10		-- meters
 local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_LIMIT = 7 * 1852		-- meters, 7nm distance
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
-local GPA_TOO_HIGH_FACT = 1.6			-- multiplier
+local GPA_TOO_HIGH_FACT = 1.5			-- multiplier
 local GPA_TOO_HIGH_LIMIT = 8			-- degrees
 local BOGUS_THR_ELEV_LIMIT = 500		-- feet
 local STD_BARO_REF = 29.92			-- inches of mercury
@@ -293,7 +292,7 @@ RAAS_xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
     dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
     dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines, dr_mtow,
-    dr_eng_gen, dr_apu_gen, dr_plug_bus_load
+    dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws
 local cur_arpts = {}
 local raas_start_time = nil
 local last_airport_reload = 0
@@ -840,8 +839,16 @@ local function raas_reset()
 	dr_ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
 	dr_eng_gen = dataref_table("sim/cockpit/electrical/generator_on")
 	dr_apu_gen = dataref_table("sim/cockpit/electrical/generator_apu_on")
-	dr_plug_bus_load = dataref_table("sim/cockpit2/electrical/" ..
-	    "plugin_bus_load_amps")
+	dr_gpws = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
+
+	-- Unfortunately at this moment electrical loading is broken,
+	-- because X-Plane resets plugin_bus_load_amps when the aircraft
+	-- is repositioned, making it impossible for us to track our
+	-- electrical laod appropriately. So it's better to disable it,
+	-- than to have it be broken.
+	--dr_plug_bus_load = dataref_table("sim/cockpit2/electrical/" ..
+	--    "plugin_bus_load_amps")
+	dr_plug_bus_load = {[0] = 0, [1] = 0}
 
 	raas_start_time = os.time()
 end
@@ -1854,10 +1861,10 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		    RWY_APCH_ALT_THRESH, msg, air_apch_flap2_ann, false)
 
 		-- If we are below 470 ft AFE and we haven't annunciated yet
-		if alt < elev + RWY_APCH_ALT_THRESH and
+		if alt < telev + RWY_APCH_ALT_THRESH and
 		    air_apch_rwy_ann[arpt_id .. rwy_id] == nil then
 			-- Don't annunciate if we are too low
-			if alt > elev + RWY_APCH_ALT_THRESH -
+			if alt > telev + RWY_APCH_ALT_THRESH -
 			    RWY_APCH_ALT_WINDOW then
 				if dr_flaprqst[0] < RAAS_min_landing_flap or
 				    gpa_act > gpa_limit(rwy_gpa)
@@ -2036,7 +2043,7 @@ local function altimeter_setting()
 end
 
 -- Transfers our electrical load to bus number `busnr' (numbered from 0)
-local function xfer_elec_bus(busnr)
+function raas_xfer_elec_bus(busnr)
 	local xbusnr = (busnr + 1) % 2
 	if bus_loaded == xbusnr then
 		dr_plug_bus_load[xbusnr] = dr_plug_bus_load[xbusnr] -
@@ -2051,9 +2058,13 @@ local function xfer_elec_bus(busnr)
 end
 
 -- Returns true if X-RAAS has electrical power from the aircraft.
-local function raas_is_on()
+function raas_is_on()
 	local gen_on = false
 	local turned_on
+
+	if os.time() - raas_start_time < RAAS_STARTUP_DELAY then
+		return false
+	end
 
 	for i = 0, dr_num_engines[0] - 1 do
 		if dr_eng_gen[i] ~= 0 then
@@ -2066,13 +2077,14 @@ local function raas_is_on()
 	end
 
 	turned_on = (gen_on and (dr_bus_volt[0] > MIN_BUS_VOLT or
-	    dr_bus_volt[1] > MIN_BUS_VOLT) and dr_avionics_on[0] == 1)
+	    dr_bus_volt[1] > MIN_BUS_VOLT) and dr_avionics_on[0] == 1 and
+	    dr_gpws[0] ~= 1)
 
 	if turned_on then
 		if dr_bus_volt[0] < MIN_BUS_VOLT then
-			xfer_elec_bus(1)
+			raas_xfer_elec_bus(1)
 		else
-			xfer_elec_bus(0)
+			raas_xfer_elec_bus(0)
 		end
 	elseif bus_loaded ~= -1 then
 		dr_plug_bus_load[bus_loaded] = dr_plug_bus_load[bus_loaded] -
@@ -2087,11 +2099,8 @@ function raas_exec()
 	-- Before we start, wait a set delay, because X-Plane's datarefs
 	-- needed for proper init are unstable, so we'll give them an
 	-- extra second to fix themselves
-	if os.time() - raas_start_time < RAAS_STARTUP_DELAY then
-		return
-	end
-
-	if not raas_is_on() then
+	if os.time() - raas_start_time < RAAS_STARTUP_DELAY or
+	    not raas_is_on() then
 		return
 	end
 
@@ -2118,6 +2127,18 @@ function raas_exec()
 	altimeter_setting()
 
 	last_elev = dr_elev[0]
+end
+
+function raas_shutdown()
+	if bus_loaded ~= -1 then
+		dr_plug_bus_load[bus_loaded] = dr_plug_bus_load[bus_loaded] -
+		    XRAAS_BUS_LOAD_AMPS
+		bus_loaded = -1
+	end
+	if cur_msg["snd"] ~= nil then
+		stop_sound(cur_msg["snd"])
+		cur_msg = {}
+	end
 end
 
 local draw_scale = 0.1
@@ -2314,9 +2335,9 @@ if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
 elseif dr_num_engines[0] < RAAS_min_engines or dr_mtow[0] < RAAS_min_mtow then
-	logMsg("X-RAAS: DISABLED (" .. dr_ICAO[0] .. "; engines " ..
-	    dr_num_engines[0] .. "/" .. RAAS_min_engines .. "; MTOW: " ..
-	    math.floor(dr_mtow[0]) .. "/" .. RAAS_min_mtow .. ")")
+	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS (ICAO: " .. dr_ICAO[0] ..
+	    "; engines: " .. dr_num_engines[0] .. "/" .. RAAS_min_engines ..
+	    "; MTOW: " .. math.floor(dr_mtow[0]) .. "/" .. RAAS_min_mtow .. ")")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
@@ -2355,6 +2376,7 @@ end
 
 do_often('raas_exec()')
 do_every_draw('raas_snd_sched()')
+do_on_exit('raas_shutdown()')
 
 -- Uncomment the line below to get a nice debug display
 if RAAS_debug_graphical then
