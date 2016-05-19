@@ -372,6 +372,21 @@ local function isemptytable(t)
 	return next(t) == nil
 end
 
+function shallowcopy(orig)
+	local orig_type = type(orig)
+	local copy
+	if orig_type == 'table' then
+		copy = {}
+		for orig_key, orig_value in pairs(orig) do
+			copy[orig_key] = orig_value
+		end
+	else -- number, string, boolean, etc
+		copy = orig
+	end
+	return copy
+end
+
+
 function geo_table_idx(latlon)
 	return math.floor(latlon)
 end
@@ -974,28 +989,34 @@ local function map_apt_dat(apt_dat_fname)
 			local rwys = apt["rwys"]
 			local gpa1, gpa2, tch1, tch2, telev1, telev2 =
 			    0, 0, 0, 0, 0, 0
+			local rwy
 
-			if #comps >= 8 + 9 + 5 + 6 and
-			    comps[8 + 9 + 5 + 1]:find("GPA1:") == 1 and
-			    comps[8 + 9 + 5 + 2]:find("GPA2:") == 1 and
-			    comps[8 + 9 + 5 + 3]:find("TCH1:") == 1 and
-			    comps[8 + 9 + 5 + 4]:find("TCH2:") == 1 and
-			    comps[8 + 9 + 5 + 3]:find("TELEV1:") == 1 and
-			    comps[8 + 9 + 5 + 4]:find("TELEV2:") == 1 then
-				gpa1 = tonumber(comps[8 + 9 + 5 + 1])
-				gpa2 = tonumber(comps[8 + 9 + 5 + 2])
-				tch1 = tonumber(comps[8 + 9 + 5 + 3])
-				tch2 = tonumber(comps[8 + 9 + 5 + 4])
-				telev1 = tonumber(comps[8 + 9 + 5 + 5])
-				telev2 = tonumber(comps[8 + 9 + 5 + 6])
+			if #comps >= 28 and
+			    comps[23]:find("GPA1:") == 1 and
+			    comps[24]:find("GPA2:") == 1 and
+			    comps[25]:find("TCH1:") == 1 and
+			    comps[26]:find("TCH2:") == 1 and
+			    comps[27]:find("TELEV1:") == 1 and
+			    comps[28]:find("TELEV2:") == 1 then
+				gpa1 = tonumber(comps[23]:sub(6))
+				gpa2 = tonumber(comps[24]:sub(6))
+				tch1 = tonumber(comps[25]:sub(6))
+				tch2 = tonumber(comps[26]:sub(6))
+				telev1 = tonumber(comps[27]:sub(8))
+				telev2 = tonumber(comps[28]:sub(8))
 			end
 
-			rwys[#rwys + 1] = {
-				width,
-				id1, lat1, lon1, displ1, blast1,
-				id2, lat2, lon2, displ2, blast2,
-				gpa1, gpa2, tch1, tch2, telev1, telev2
+			rwy = {
+			    ["w"] = width,
+			    ["id1"] = id1, ["lat1"] = lat1, ["lon1"] = lon1,
+			    ["dis1"] = displ1, ["bla1"] = blast1,
+			    ["gpa1"] = gpa1, ["tch1"] = tch1, ["te1"] = telev1,
+			    ["id2"] = id2, ["lat2"] = lat2, ["lon2"] = lon2,
+			    ["dis2"] = displ2, ["bla2"] = blast2,
+			    ["gpa2"] = gpa2, ["tch2"] = tch2, ["te2"] = telev2
 			}
+
+			rwys[#rwys + 1] = rwy
 		end
 	end
 
@@ -1111,24 +1132,24 @@ local function recreate_apt_dat_cache(apt_dat_files)
 		    " 0 0 " .. icao .. " TA:" .. arpt["TA"] .. " TL:" ..
 		    arpt["TL"] .. "\n")
 		for i, rwy in pairs(rwys) do
-			apt_dat_cache_f:write("100 " .. rwy[1] ..
+			apt_dat_cache_f:write("100 " .. rwy["w"] ..
 			    " 0 0 0 0 0 0 " ..
-			    rwy[2] .. " " ..
-			    rwy[3] .. " " ..
-			    rwy[4] .. " " ..
-			    rwy[5] .. " " ..
-			    rwy[6] .. " 0 0 0 0 " ..
-			    rwy[7] .. " " ..
-			    rwy[8] .. " " ..
-			    rwy[9] .. " " ..
-			    rwy[10] .. " " ..
-			    rwy[11] ..
-			    " GPA1:" .. rwy[12] ..
-			    " GPA2:" .. rwy[13] ..
-			    " TCH1:" .. rwy[14] ..
-			    " TCH2:" .. rwy[15] ..
-			    " TELEV1:" .. rwy[16] ..
-			    " TELEV2:" .. rwy[17] ..
+			    rwy["id1"] .. " " ..
+			    rwy["lat1"] .. " " ..
+			    rwy["lon1"] .. " " ..
+			    rwy["dis1"] .. " " ..
+			    rwy["bla1"] .. " 0 0 0 0 " ..
+			    rwy["id2"] .. " " ..
+			    rwy["lat2"] .. " " ..
+			    rwy["lon2"] .. " " ..
+			    rwy["dis2"] .. " " ..
+			    rwy["bla2"] ..
+			    " GPA1:" .. rwy["gpa1"] ..
+			    " GPA2:" .. rwy["gpa2"] ..
+			    " TCH1:" .. rwy["tch1"] ..
+			    " TCH2:" .. rwy["tch2"] ..
+			    " TELEV1:" .. rwy["te1"] ..
+			    " TELEV2:" .. rwy["te2"] ..
 			    "\n")
 		end
 	end
@@ -1188,13 +1209,14 @@ local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 		local myhdg = dir2hdg(dir_v)
 
 		for i, orwy in pairs(db_rwys) do
-			if (orwy[2]:sub(1, 2) == num_id and
-			    orwy[2] ~= rwy_id) or
-			    (orwy[7]:sub(1, 2) == num_id and
-			    orwy[7] ~= rwy_id) then
+			if (orwy["id1"]:sub(1, 2) == num_id and
+			    orwy["id1"] ~= rwy_id) or
+			    (orwy["id2"]:sub(1, 2) == num_id and
+			    orwy["id2"] ~= rwy_id) then
 				-- this is a parallel runway, measure the
 				-- distance to it from us
-				local othr_v = sph2fpp({orwy[3], orwy[4]}, fpp)
+				local othr_v = sph2fpp({orwy["lat1"],
+				    orwy["lon1"]}, fpp)
 				local v = vect2_sub(othr_v, thr_v)
 				local a = rel_hdg(dir2hdg(dir_v), dir2hdg(v))
 				local dist = math.abs(math.sin(math.rad(a)) *
@@ -1269,44 +1291,26 @@ local function load_rwy_info(arpt_id, fpp)
 	--]]
 
 	for i, db_rwy in pairs(db_rwys) do
-		local width = db_rwy[1]
+		local width = db_rwy["w"]
 
-		local id1 = db_rwy[2]
-		local lat1 = db_rwy[3]
-		local lon1 = db_rwy[4]
-		local thr1_v = sph2fpp({lat1, lon1}, fpp)
-		local displ1 = db_rwy[5]
-		local blast1 = db_rwy[6]
+		local thr1_v = sph2fpp({db_rwy["lat1"], db_rwy["lon1"]}, fpp)
+		local displ1 = db_rwy["dis1"]
+		local blast1 = db_rwy["bla1"]
 
-		local id2 = db_rwy[7]
-		local lat2 = db_rwy[8]
-		local lon2 = db_rwy[9]
-		local thr2_v = sph2fpp({lat2, lon2}, fpp)
-		local displ2 = db_rwy[10]
-		local blast2 = db_rwy[11]
+		local thr2_v = sph2fpp({db_rwy["lat2"], db_rwy["lon2"]}, fpp)
+		local displ2 = db_rwy["dis2"]
+		local blast2 = db_rwy["bla2"]
 
 		local dir_v = vect2_sub(thr2_v, thr1_v)
 		local hdg1 = dir2hdg(dir_v)
 		local hdg2 = dir2hdg(vect2_neg(dir_v))
 
-		local rwy = {
-		    ["id1"] = id1,
-		    ["id2"] = id2,
-		    ["t1x"] = thr1_v[1],
-		    ["t1y"] = thr1_v[2],
-		    ["t2x"] = thr2_v[1],
-		    ["t2y"] = thr2_v[2],
-		    ["hdg1"] = hdg1,
-		    ["hdg2"] = hdg2,
-		    ["width"] = width,
-		    ["len"] = vect2_abs(vect2_sub(thr2_v, thr1_v)),
-		    ["GPA1"] = db_rwy[12],
-		    ["GPA2"] = db_rwy[13],
-		    ["TCH1"] = db_rwy[14],
-		    ["TCH2"] = db_rwy[15],
-		    ["TELEV1"] = db_rwy[16],
-		    ["TELEV2"] = db_rwy[17]
-		}
+		local rwy = shallowcopy(db_rwy)
+		rwy["t1v"] = thr1_v
+		rwy["t2v"] = thr2_v
+		rwy["hdg1"] = hdg1
+		rwy["hdg2"] = hdg2
+		rwy["len"] = vect2_abs(vect2_sub(thr2_v, thr1_v))
 
 		local len = vect2_abs(dir_v)
 
@@ -1316,10 +1320,10 @@ local function load_rwy_info(arpt_id, fpp)
 		rwy["prox_bbox"] = make_rwy_bbox(thr1_v, dir_v,
 		    RWY_PROXIMITY_LAT_FRACT * width,
 		    len + RWY_PROXIMITY_LON_DISPL, RWY_PROXIMITY_LON_DISPL)
-		rwy["apch_prox_bbox1"] = make_apch_prox_bbox(db_rwys, id1,
-		    thr1_v, width, dir_v, fpp)
-		rwy["apch_prox_bbox2"] = make_apch_prox_bbox(db_rwys, id1,
-		    thr2_v, width, vect2_neg(dir_v), fpp)
+		rwy["apch_prox_bbox1"] = make_apch_prox_bbox(db_rwys,
+		    db_rwy["id1"], thr1_v, width, dir_v, fpp)
+		rwy["apch_prox_bbox2"] = make_apch_prox_bbox(db_rwys,
+		    db_rwy["id2"], thr2_v, width, vect2_neg(dir_v), fpp)
 
 		rwys[#rwys + 1] = rwy
 	end
@@ -1442,8 +1446,8 @@ end
 -- Determines which of two ends of a runway is closer to the aircraft's
 -- current position.
 local function closest_rwy_end(pos, rwy)
-	if vect2_abs(vect2_sub(pos, {rwy["t1x"], rwy["t1y"]})) <
-	    vect2_abs(vect2_sub(pos, {rwy["t2x"], rwy["t2y"]})) then
+	if vect2_abs(vect2_sub(pos, rwy["t1v"])) <
+	    vect2_abs(vect2_sub(pos, rwy["t2v"])) then
 		return rwy["id1"]
 	else
 		return rwy["id2"]
@@ -1749,15 +1753,15 @@ local function ground_on_runway_aligned_arpt(arpt)
 		if point_in_poly(pos_v, rwy["tora_bbox"]) then
 			on_rwy = true
 			on_rwy_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
-			    pos_v, {rwy["t2x"], rwy["t2y"]})
+			    pos_v, rwy["t2v"])
 			on_rwy_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
-			    pos_v, {rwy["t1x"], rwy["t1y"]})
+			    pos_v, rwy["t1v"])
 		end
 		if point_in_poly(pos_v, rwy["asda_bbox"]) then
 			stop_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
-			    pos_v, {rwy["t2x"], rwy["t2y"]}, rwy["len"])
+			    pos_v, rwy["t2v"], rwy["len"])
 			stop_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
-			    pos_v, {rwy["t1x"], rwy["t1y"]}, rwy["len"])
+			    pos_v, rwy["t1v"], rwy["len"])
 		else
 			stop_check_reset(arpt_id, rwy["id1"])
 			stop_check_reset(arpt_id, rwy["id2"])
@@ -1813,6 +1817,8 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
     ceil, thickness, msg, ann_table, critical)
 	if not ann_table[arpt_id .. rwy_id] and
 	    alt < elev + ceil and alt > elev + ceil - thickness then
+		logMsg("check at " .. ceil .. "/" .. thickness)
+		logMsg("gpa_act = " .. gpa_act .. " rwy_gpa = " .. rwy_gpa)
 		if dr_flaprqst[0] < RAAS_min_landing_flap then
 			msg[#msg + 1] = "flaps"
 			msg[#msg + 1] = "flaps"
@@ -1837,13 +1843,12 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 	    math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH then
 		local msg = {}
 		local msg_prio = MSG_PRIO_MED
-		local thr_v = {rwy["t" .. suffix .. "x"],
-		    rwy["t" .. suffix .. "y"]}
+		local thr_v = rwy["t" .. suffix .. "v"]
 		local dist = vect2_abs(vect2_sub(pos_v, thr_v))
 
-		local rwy_gpa = rwy["GPA" .. suffix]
-		local tch = rwy["TCH" .. suffix]
-		local telev = rwy["TELEV" .. suffix]
+		local rwy_gpa = rwy["gpa" .. suffix]
+		local tch = rwy["tch" .. suffix]
+		local telev = rwy["te" .. suffix]
 		local above_tch = ft2m(dr_baro_alt[0] - (telev + tch))
 
 		if RAAS_too_high_enabled and tch ~= 0 and rwy_gpa ~= 0 and
