@@ -93,7 +93,7 @@ RAAS advisories:
 		   operator-defined threshold (whichever is shortest)
 
 	8) Runway distance remaining
-	    Message: "XXXX THOUSAND [METERS|FEET] REMAINING"
+	    Message: "XXXX THOUSAND REMAINING"
 	    Conditions:
 		*) Aircraft on or above last half of runway below 100 feet AGL
 		*) Groundspeed > 40 knots
@@ -199,7 +199,8 @@ local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
 local RWY_PROXIMITY_LAT_FRACT = 3
 local RWY_PROXIMITY_LON_DISPL = 457		-- meters, 1500 ft
-local RWY_PROXIMITY_TIME_FACT = 2
+local RWY_PROXIMITY_TIME_FACT = 2		-- seconds
+local LANDING_ROLLOUT_TIME_FACT = 1		-- seconds
 local RADALT_GRD_THRESH = 5
 local RADALT_FLARE_THRESH = 50
 local RAAS_STARTUP_DELAY = 3			-- seconds
@@ -218,6 +219,7 @@ local ALTIMETER_SETTING_QNH_ERR_LIMIT = 100	-- feet
 local ALTIMETER_SETTING_QFE_ERR_LIMIT = 100	-- feet
 local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 local IMMEDIATE_STOP_DIST = 50			-- meters
+local GOAROUND_CLB_RATE_THRESH = 450		-- feet per minute
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -334,6 +336,7 @@ local messages = {
 local cur_msg = {}
 local view_is_ext = false
 local bus_loaded = -1
+local last_elev = 0
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -1422,11 +1425,11 @@ local function load_nearest_airports()
 end
 
 -- Computes the aircraft's on-ground velocity vector. The length of the
--- vector is computed as a 2-second extra ahead of the actual aircraft's
--- nosewheel position.
-local function acf_vel_vector()
-	return vect2_set_abs(hdg2dir(dr_hdg[0]),
-	    RWY_PROXIMITY_TIME_FACT * dr_gs[0] - dr_nw_offset[0])
+-- vector is computed as a `time_fact' (in seconds) extra ahead of the
+-- actual aircraft's nosewheel position.
+local function acf_vel_vector(time_fact)
+	return vect2_set_abs(hdg2dir(dr_hdg[0]), time_fact * dr_gs[0] -
+	    dr_nw_offset[0])
 end
 
 -- Determines which of two ends of a runway is closer to the aircraft's
@@ -1554,7 +1557,7 @@ end
 
 local function ground_runway_approach()
 	local lat, lon = dr_lat[0], dr_lon[0]
-	local vel_v = acf_vel_vector()
+	local vel_v = acf_vel_vector(RWY_PROXIMITY_TIME_FACT)
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		ground_runway_approach_arpt(arpt, vel_v)
@@ -1690,8 +1693,9 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 
 	if dr_rad_alt[0] > RADALT_GRD_THRESH then
 		stop_check_reset(arpt_id, rwy_id)
-		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH then
-
+		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH and
+		    m2ft(dr_elev[0] - last_elev) * 60 < GOAROUND_CLB_RATE_THRESH
+		    then
 			if (dist < len / 2 or (dist <= RAAS_min_landing_dist and
 			    len >= RAAS_min_landing_dist)) then
 				if not long_landing_ann then
@@ -1728,7 +1732,8 @@ end
 
 local function ground_on_runway_aligned_arpt(arpt)
 	local on_rwy = false
-	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
+	local pos_v = vect2_add(sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"]),
+	    acf_vel_vector(LANDING_ROLLOUT_TIME_FACT))
 	local arpt_id = arpt["arpt_id"]
 	local hdg = dr_hdg[0]
 
@@ -2111,6 +2116,8 @@ function raas_exec()
 	ground_on_runway_aligned()
 	air_runway_approach()
 	altimeter_setting()
+
+	last_elev = dr_elev[0]
 end
 
 local draw_scale = 0.1
@@ -2151,7 +2158,7 @@ function raas_dbg_draw()
 	graphics.set_width(2)
 
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, cur_arpt["fpp"])
-	local vel_v = acf_vel_vector()
+	local vel_v = acf_vel_vector(RWY_PROXIMITY_TIME_FACT)
 
 	draw_scale = math.min(650 / vect2_abs(pos_v), 1)
 
