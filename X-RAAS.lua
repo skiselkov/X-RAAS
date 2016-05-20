@@ -512,38 +512,53 @@ local function rel_hdg(hdg1, hdg2)
 end
 
 local function m2ft(m)
+	assert(m ~= nil)
 	return m * 3.281
 end
 
 local function ft2m(ft)
+	assert(ft ~= nil)
 	return ft / 3.281
 end
 
 local function vect2_add(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return {a[1] + b[1], a[2] + b[2]}
 end
 
 local function vect2_sub(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return {a[1] - b[1], a[2] - b[2]}
 end
 
 local function vect2_scmul(a, x)
+	assert(a ~= nil)
+	assert(x ~= nil)
 	return {a[1] * x, a[2] * x}
 end
 
 local function vect2_dotprod(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return a[1] * b[1] + a[2] * b[2]
 end
 
 local function vect2_abs(a)
+	assert(a ~= nil)
 	return math.sqrt((a[1] * a[1]) + (a[2] * a[2]))
 end
 
 local function vect2_dist(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return vect2_abs(vect2_sub(a, b))
 end
 
 local function vect2_set_abs(a, abs)
+	assert(a ~= nil)
+	assert(abs ~= nil)
 	local oldval = vect2_abs(a)
 	if oldval ~= 0 then
 		return vect2_scmul(a, abs / oldval), oldval
@@ -553,6 +568,7 @@ local function vect2_set_abs(a, abs)
 end
 
 local function vect2_unit(a)
+	assert(a ~= nil)
 	local len = vect2_abs(a)
 	if len == 0 then
 		return a, 0
@@ -562,6 +578,8 @@ local function vect2_unit(a)
 end
 
 local function vect2_norm(v, right)
+	assert(v ~= nil)
+	assert(right ~= nil)
 	if right then
 		return {v[2], -v[1]}
 	else
@@ -570,6 +588,8 @@ local function vect2_norm(v, right)
 end
 
 local function vect2_rot(v, angle)
+	assert(v ~= nil)
+	assert(angle ~= nil)
 	local sin_angle = math.sin(math.rad(angle))
 	local cos_angle = math.cos(math.rad(angle))
 	return {v[1] * cos_angle - v[2] * sin_angle,
@@ -577,14 +597,17 @@ local function vect2_rot(v, angle)
 end
 
 local function vect2_neg(v)
+	assert(v ~= nil)
 	return {-v[1], -v[2]}
 end
 
 local function hdg2dir(hdg)
+	assert(hdg ~= nil)
 	return {math.sin(math.rad(hdg)), math.cos(math.rad(hdg))}
 end
 
 local function dir2hdg(dir)
+	assert(dir ~= nil)
 	if dir[1] >= 0 and dir[2] >= 0 then
 		return math.deg(math.asin(dir[1] / vect2_abs(dir)))
 	elseif dir[1] < 0 and dir[2] >= 0 then
@@ -595,14 +618,24 @@ local function dir2hdg(dir)
 end
 
 local function vect2_parallel(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return (a[2] == 0 and b[2] == 0) or ((a[1] / a[2]) == (b[1] / b[2]))
 end
 
 local function vect2_eq(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return a[1] == b[1] and a[2] == b[2]
 end
 
 local function vect2vect_isect(a, oa, b, ob, confined)
+	assert(a ~= nil)
+	assert(oa ~= nil)
+	assert(b ~= nil)
+	assert(ob ~= nil)
+	assert(confined ~= nil)
+
 	if vect2_parallel(a, b) then
 		return nil
 	end
@@ -640,6 +673,10 @@ local function vect2vect_isect(a, oa, b, ob, confined)
 end
 
 local function vect2poly_isect(a, oa, poly)
+	assert(a ~= nil)
+	assert(oa ~= nil)
+	assert(poly ~= nil)
+
 	local res = {}
 
 	for i = 0, #poly - 1 do
@@ -656,6 +693,9 @@ local function vect2poly_isect(a, oa, poly)
 end
 
 local function point_in_poly(pt, poly)
+	assert(pt ~= nil)
+	assert(poly ~= nil)
+
 	-- Simplest approach is ray casting. Construct a vector from `pt' to
 	-- a point very far away and count how many edges of the bbox polygon
 	-- we hit. If we hit an even number, we're outside, otherwise we're
@@ -666,6 +706,8 @@ local function point_in_poly(pt, poly)
 end
 
 local function vect3_unit(v)
+	assert(v ~= nil)
+
 	local len = vect3_abs(v)
 	if len == 0 then
 		return nil
@@ -675,26 +717,41 @@ local function vect3_unit(v)
 end
 
 local function vect3_add(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return {a[1] + b[1], a[2] + b[2] , a[3] + b[3]}
 end
 
 local function vect3_sub(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return {a[1] - b[1], a[2] - b[2] , a[3] - b[3]}
 end
 
 local function vect3_abs(a)
+	assert(a ~= nil)
 	return math.sqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3])
 end
 
 local function vect3_scmul(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return {a[1] * b, a[2] * b, a[3] * b}
 end
 
 local function vect3_dotprod(a, b)
+	assert(a ~= nil)
+	assert(b ~= nil)
 	return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 end
 
 local function vect2sph_isect(v, o, c, r, confined)
+	assert(v ~= nil)
+	assert(o ~= nil)
+	assert(c ~= nil)
+	assert(r ~= nil)
+	assert(confined ~= nil)
+
 	local l, d = vect3_unit(v)
 	local o_min_c = vect3_sub(o, c)
 	local l_dot_o_min_c = vect3_dotprod(l, o_min_c)
@@ -730,6 +787,10 @@ local function vect2sph_isect(v, o, c, r, confined)
 end
 
 local function sph_xlate_init(displac, rot, inv)
+	assert(displac ~= nil)
+	assert(rot ~= nil)
+	assert(inv ~= nil)
+
 	local alpha, bravo, theta
 
 	local xlate = {}
@@ -787,6 +848,9 @@ local function sph_xlate_init(displac, rot, inv)
 end
 
 local function sph_xlate_vect(p, xlate)
+	assert(p ~= nil)
+	assert(xlate ~= nil)
+
 	local q = matrix_mul(xlate[1], p, 3, 1, 3)
 	local r = {q[2], q[3]}
 	local s = matrix_mul(xlate[2], r, 2, 1, 2)
@@ -796,6 +860,8 @@ local function sph_xlate_vect(p, xlate)
 end
 
 local function sph2ecef(pos)
+	assert(pos ~= nil)
+
 	local lat_rad = math.rad(pos[1])
 	local lon_rad = math.rad(pos[2])
 	local R0 = EARTH_MSL * math.cos(lat_rad)
@@ -804,6 +870,8 @@ local function sph2ecef(pos)
 end
 
 local function ortho_fpp_init(center)
+	assert(center ~= nil)
+
 	local fpp = {}
 
 	fpp[1] = sph_xlate_init(center, 0, false)
@@ -813,11 +881,16 @@ local function ortho_fpp_init(center)
 end
 
 local function sph2fpp(pos, fpp)
+	assert(pos ~= nil)
+	assert(fpp ~= nil)
 	local pos_v = sph_xlate_vect(sph2ecef(pos), fpp[1])
 	return {pos_v[2], pos_v[3]}
 end
 
 local function fpp2sph(pos, fpp)
+	assert(pos ~= nil)
+	assert(fpp ~= nil)
+
 	local v = {-1000000000, pos[1], pos[2]}
 	local o = {1000000000, 0, 0}
 	local i = vect2sph_isect(v, o, {0, 0, 0}, EARTH_MSL, false)
@@ -870,6 +943,8 @@ end
 
 -- Given a runway ID, returns the reciprical runway ID.
 local function recip_rwy_id(rwy_id)
+	assert(rwy_id ~= nil)
+
 	local num = tonumber(rwy_id:sub(1, 2))
 	local recip_num = num + 18
 	local recip_suffix = ""
@@ -899,6 +974,12 @@ end
 -- threshold longitudinal displacement, prepares a bounding box which
 -- encompasses that runway.
 local function make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
+	assert(thresh_v ~= nil)
+	assert(dir_v ~= nil)
+	assert(width ~= nil)
+	assert(len ~= nil)
+	assert(long_displ ~= nil)
+
 	local a, b, c, d, len_displ_v
 
 	-- displace the 'a' point from the runway threshold laterally
@@ -927,6 +1008,8 @@ end
 -- and reconstructs our apt_dat table. This is called at the start of
 -- X-RAAS to populate the airport and runway database. The 
 local function map_apt_dat(apt_dat_fname)
+	assert(apt_dat_fname ~= nil)
+
 	apt_dat_f = io.open(apt_dat_fname)
 	if apt_dat_f == nil then
 		return 0
@@ -1096,14 +1179,14 @@ local function load_airports_txt()
 			local tch = tonumber(comps[13])
 
 			for i, rwy in pairs(last_arpt["rwys"]) do
-				if rwy[2] == rwy_id then
-					rwy[12] = gpa
-					rwy[14] = tch
-					rwy[16] = telev
-				elseif rwy[7] == rwy_id then
-					rwy[13] = gpa
-					rwy[15] = tch
-					rwy[17] = telev
+				if rwy["id1"] == rwy_id then
+					rwy["gpa1"] = gpa
+					rwy["tch1"] = tch
+					rwy["te1"] = telev
+				elseif rwy["id2"] == rwy_id then
+					rwy["gpa2"] = gpa
+					rwy["tch2"] = tch
+					rwy["te2"] = telev
 					break
 				end
 			end
@@ -1117,6 +1200,8 @@ end
 -- in it to the X-RAAS_apt_dat.cache so that a subsequent run of X-RAAS can
 -- pick this info up.
 local function recreate_apt_dat_cache(apt_dat_files)
+	assert(apt_dat_files ~= nil)
+
 	-- First scan all the provided apt.dat files
 	for i = 1, #apt_dat_files do
 		map_apt_dat(apt_dat_files[i])
@@ -1128,28 +1213,42 @@ local function recreate_apt_dat_cache(apt_dat_files)
 	    "X-RAAS_apt_dat.cache", "w")
 	for icao, arpt in pairs(apt_dat) do
 		local rwys = arpt["rwys"]
-		apt_dat_cache_f:write("1 " .. arpt["elev"] ..
-		    " 0 0 " .. icao .. " TA:" .. arpt["TA"] .. " TL:" ..
-		    arpt["TL"] .. "\n")
+		local elev, TA, TL = arpt["elev"], arpt["TA"], arpt["TL"]
+		assert(elev ~= nil and TA ~= nil and TL ~= nil)
+		apt_dat_cache_f:write("1 " .. elev .. " 0 0 " .. icao ..
+		    " TA:" .. TA .. " TL:" .. TL .. "\n")
 		for i, rwy in pairs(rwys) do
+			local id1, lat1, lon1, dis1, bla1, gpa1, tch1, te1 =
+			    rwy["id1"], rwy["lat1"], rwy["lon1"], rwy["dis1"],
+			    rwy["bla1"], rwy["gpa1"], rwy["tch1"], rwy["te1"]
+			local id2, lat2, lon2, dis2, bla2, gpa2, tch2, te2 =
+			    rwy["id2"], rwy["lat2"], rwy["lon2"], rwy["dis2"],
+			    rwy["bla2"], rwy["gpa2"], rwy["tch2"], rwy["te2"]
+			assert(id1 ~= nil and lat1 ~= nil and lon1 ~= nil and
+			    dis1 ~= nil and bla1 ~= nil and gpa1 ~= nil and
+			    tch1 ~= nil and te1 ~= nil)
+			assert(id2 ~= nil and lat2 ~= nil and lon2 ~= nil and
+			    dis2 ~= nil and bla2 ~= nil and gpa2 ~= nil and
+			    tch2 ~= nil and te2 ~= nil)
+
 			apt_dat_cache_f:write("100 " .. rwy["w"] ..
 			    " 0 0 0 0 0 0 " ..
-			    rwy["id1"] .. " " ..
-			    rwy["lat1"] .. " " ..
-			    rwy["lon1"] .. " " ..
-			    rwy["dis1"] .. " " ..
-			    rwy["bla1"] .. " 0 0 0 0 " ..
-			    rwy["id2"] .. " " ..
-			    rwy["lat2"] .. " " ..
-			    rwy["lon2"] .. " " ..
-			    rwy["dis2"] .. " " ..
-			    rwy["bla2"] ..
-			    " GPA1:" .. rwy["gpa1"] ..
-			    " GPA2:" .. rwy["gpa2"] ..
-			    " TCH1:" .. rwy["tch1"] ..
-			    " TCH2:" .. rwy["tch2"] ..
-			    " TELEV1:" .. rwy["te1"] ..
-			    " TELEV2:" .. rwy["te2"] ..
+			    id1 .. " " ..
+			    lat1 .. " " ..
+			    lon1 .. " " ..
+			    dis1 .. " " ..
+			    bla1 .. " 0 0 0 0 " ..
+			    id2 .. " " ..
+			    lat2 .. " " ..
+			    lon2 .. " " ..
+			    dis2 .. " " ..
+			    bla2 ..
+			    " GPA1:" .. gpa1 ..
+			    " GPA2:" .. gpa2 ..
+			    " TCH1:" .. tch1 ..
+			    " TCH2:" .. tch2 ..
+			    " TELEV1:" .. te1 ..
+			    " TELEV2:" .. te2 ..
 			    "\n")
 		end
 	end
@@ -1189,6 +1288,13 @@ end
   the overlapping excess from the bounding polygon.
 --]]
 local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
+	assert(db_rwys ~= nil)
+	assert(rwy_id ~= nil)
+	assert(thr_v ~= nil)
+	assert(width ~= nil)
+	assert(dir_v ~= nil)
+	assert(fpp ~= nil)
+
 	local x, a, b, b1, c, c1, d
 	local bbox = {}
 	local limit_left, limit_right = 1000000, 1000000
@@ -1215,8 +1321,9 @@ local function make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 			    orwy["id2"] ~= rwy_id) then
 				-- this is a parallel runway, measure the
 				-- distance to it from us
-				local othr_v = sph2fpp({orwy["lat1"],
-				    orwy["lon1"]}, fpp)
+				local lat1, lon1 = orwy["lat1"], orwy["lon1"]
+				assert(lat1 ~= nil and lon1 ~= nil)
+				local othr_v = sph2fpp({lat1, lon1}, fpp)
 				local v = vect2_sub(othr_v, thr_v)
 				local a = rel_hdg(dir2hdg(dir_v), dir2hdg(v))
 				local dist = math.abs(math.sin(math.rad(a)) *
@@ -1267,6 +1374,9 @@ end
 -- (but more verbose in terms of used memory) format. This function also
 -- constructs the transformed threshold coordinates and bounding boxes.
 local function load_rwy_info(arpt_id, fpp)
+	assert(arpt_id ~= nil)
+	assert(fpp ~= nil)
+
 	local rwys = {}
 	local db_arpt = apt_dat[arpt_id]
 	local db_rwys = db_arpt["rwys"]
@@ -1292,38 +1402,61 @@ local function load_rwy_info(arpt_id, fpp)
 
 	for i, db_rwy in pairs(db_rwys) do
 		local width = db_rwy["w"]
+		local lat1, lon1, lat2, lon2 = db_rwy["lat1"], db_rwy["lon1"],
+		    db_rwy["lat2"], db_rwy["lon2"]
+		assert(lat1 ~= nil and lon1 ~= nil and lat2 ~= nil and
+		    lon2 ~= nil)
 
-		local thr1_v = sph2fpp({db_rwy["lat1"], db_rwy["lon1"]}, fpp)
+		local dt1v = sph2fpp({lat1, lon1}, fpp)
 		local displ1 = db_rwy["dis1"]
 		local blast1 = db_rwy["bla1"]
+		assert(displ1 ~= nil and blast1 ~= nil)
 
-		local thr2_v = sph2fpp({db_rwy["lat2"], db_rwy["lon2"]}, fpp)
+		local dt2v = sph2fpp({lat2, lon2}, fpp)
 		local displ2 = db_rwy["dis2"]
 		local blast2 = db_rwy["bla2"]
+		assert(displ2 ~= nil and blast2 ~= nil)
 
-		local dir_v = vect2_sub(thr2_v, thr1_v)
+		local dir_v = vect2_sub(dt2v, dt1v)
+		local dlen = vect2_abs(dir_v)
 		local hdg1 = dir2hdg(dir_v)
 		local hdg2 = dir2hdg(vect2_neg(dir_v))
 
+		local t1v = vect2_add(dt1v, vect2_set_abs(dir_v, displ1))
+		local t2v = vect2_add(dt2v, vect2_set_abs(vect2_neg(dir_v),
+		    displ2))
+		local len = vect2_abs(vect2_sub(t2v, t1v))
+
 		local rwy = shallowcopy(db_rwy)
-		rwy["t1v"] = thr1_v
-		rwy["t2v"] = thr2_v
+		rwy["t1v"] = t1v
+		rwy["t2v"] = t2v
+		rwy["dt1v"] = dt1v
+		rwy["dt2v"] = dt2v
 		rwy["hdg1"] = hdg1
 		rwy["hdg2"] = hdg2
-		rwy["len"] = vect2_abs(vect2_sub(thr2_v, thr1_v))
+		rwy["len"] = len
+		rwy["dlen"] = dlen
+		-- landing length, from t1v to dt2v and from t2v to dt1v
+		rwy["llen1"] = vect2_abs(vect2_sub(dt2v, t1v))
+		rwy["llen2"] = vect2_abs(vect2_sub(dt1v, t2v))
 
-		local len = vect2_abs(dir_v)
+		rwy["rwy_bbox"] = make_rwy_bbox(t1v, dir_v, width, len, 0)
+		rwy["tora_bbox"] = make_rwy_bbox(dt1v, dir_v, width, dlen, 0)
+		rwy["asda_bbox"] = make_rwy_bbox(dt1v, dir_v, width,
+		    dlen + blast2, blast1)
 
-		rwy["tora_bbox"] = make_rwy_bbox(thr1_v, dir_v, width, len, 0)
-		rwy["asda_bbox"] = make_rwy_bbox(thr1_v, dir_v, width,
-		    len + blast2, blast1)
-		rwy["prox_bbox"] = make_rwy_bbox(thr1_v, dir_v,
+		local prox_lon_bonus1 = math.max(displ1,
+		    RWY_PROXIMITY_LON_DISPL - displ1)
+		local prox_lon_bonus2 = math.max(displ2,
+		    RWY_PROXIMITY_LON_DISPL - displ2)
+
+		rwy["prox_bbox"] = make_rwy_bbox(t1v, dir_v,
 		    RWY_PROXIMITY_LAT_FRACT * width,
-		    len + RWY_PROXIMITY_LON_DISPL, RWY_PROXIMITY_LON_DISPL)
+		    len + prox_lon_bonus2, prox_lon_bonus1)
 		rwy["apch_prox_bbox1"] = make_apch_prox_bbox(db_rwys,
-		    db_rwy["id1"], thr1_v, width, dir_v, fpp)
+		    db_rwy["id1"], t1v, width, dir_v, fpp)
 		rwy["apch_prox_bbox2"] = make_apch_prox_bbox(db_rwys,
-		    db_rwy["id2"], thr2_v, width, vect2_neg(dir_v), fpp)
+		    db_rwy["id2"], t2v, width, vect2_neg(dir_v), fpp)
 
 		rwys[#rwys + 1] = rwy
 	end
@@ -1336,9 +1469,11 @@ end
 -- transform centered on the airport's reference point and pre-computes all
 -- relevant points for the airport in that space.
 local function load_airport(arpt_id)
+	assert(arpt_id ~= nil)
 	local db_arpt = apt_dat[arpt_id]
 	local lat = db_arpt["lat"]
 	local lon = db_arpt["lon"]
+	assert(lat ~= nil and lon ~= nil)
 	local fpp = ortho_fpp_init({lat, lon})
 	local ecef = sph2ecef({lat, lon})
 	local arpt = {
@@ -1358,6 +1493,11 @@ end
 -- The actual worker function for find_nearest_airports. Performs the search
 -- in a specified airport_geo_table square. Position is a 3-space ECEF vector.
 local function find_nearest_airports_idx(pos, lat_idx, lon_idx, arpt_list)
+	assert(pos ~= nil)
+	assert(lat_idx ~= nil)
+	assert(lon_idx ~= nil)
+	assert(arpt_list ~= nil)
+
 	local lat_tbl, lon_tbl
 
 	if lat_idx < -80 or lat_idx > 80 then
@@ -1392,6 +1532,9 @@ end
 -- apt_dat database and this function returns a table of airport IDs which
 -- matched the search.
 local function find_nearest_airports(reflat, reflon)
+	assert(reflat ~= nil)
+	assert(reflon ~= nil)
+
 	local pos = sph2ecef({reflat, reflon})
 	local ref_lat_idx = geo_table_idx(reflat)
 	local ref_lon_idx = geo_table_idx(reflon)
@@ -1439,6 +1582,7 @@ end
 -- vector is computed as a `time_fact' (in seconds) extra ahead of the
 -- actual aircraft's nosewheel position.
 local function acf_vel_vector(time_fact)
+	assert(time_fact ~= nil)
 	return vect2_set_abs(hdg2dir(dr_hdg[0]), time_fact * dr_gs[0] -
 	    dr_nw_offset[0])
 end
@@ -1446,8 +1590,11 @@ end
 -- Determines which of two ends of a runway is closer to the aircraft's
 -- current position.
 local function closest_rwy_end(pos, rwy)
-	if vect2_abs(vect2_sub(pos, rwy["t1v"])) <
-	    vect2_abs(vect2_sub(pos, rwy["t2v"])) then
+	assert(pos ~= nil)
+	assert(rwy ~= nil)
+
+	if vect2_abs(vect2_sub(pos, rwy["dt1v"])) <
+	    vect2_abs(vect2_sub(pos, rwy["dt2v"])) then
 		return rwy["id1"]
 	else
 		return rwy["id2"]
@@ -1458,6 +1605,8 @@ end
 -- raas_play_msg for announcing whether the runway is left, center or right.
 -- If no suffix is present, returns nil.
 local function rwy_lcr_msg(str)
+	assert(str ~= nil)
+
 	local lcr
 	if #str < 3 then
 		return nil
@@ -1476,6 +1625,9 @@ end
 -- Given a runway ID, appends appropriate messages suitable for raas_play_msg
 -- to say it out loud.
 local function rwy_id_to_msg(rwy_id, msg)
+	assert(rwy_id ~= nil)
+	assert(msg ~= nil)
+
 	msg[#msg + 1] = rwy_id:sub(1, 1)
 	msg[#msg + 1] = rwy_id:sub(2, 2)
 	msg[#msg + 1] = rwy_lcr_msg(rwy_id)
@@ -1484,6 +1636,9 @@ end
 -- Given a distance in meters, converts it into a message suitable for
 -- raas_play_msg based on the user's current imperial/metric settings.
 local function dist_to_msg(dist, msg)
+	assert(dist ~= nil)
+	assert(msg ~= nil)
+
 	if RAAS_use_imperial then
 		local dist_ft = dist * 3.281
 		if dist_ft >= 1000 then
@@ -1536,6 +1691,12 @@ end
 
 local function ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
     vel_v)
+	assert(arpt ~= nil)
+	assert(rwy_id ~= nil)
+	assert(rwy ~= nil)
+	assert(pos_v ~= nil)
+	assert(vel_v ~= nil)
+
 	local prox_bbox = rwy["prox_bbox"]
 	local arpt_id = arpt["arpt_id"]
 
@@ -1556,6 +1717,9 @@ local function ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 end
 
 local function ground_runway_approach_arpt(arpt, vel_v)
+	assert(arpt ~= nil)
+	assert(vel_v ~= nil)
+
 	local fpp = arpt["fpp"]
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
 
@@ -1576,6 +1740,10 @@ local function ground_runway_approach()
 end
 
 local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+	assert(rwy_id ~= nil)
+	assert(pos_v ~= nil)
+	assert(opp_thr_v ~= nil)
+
 	local msg = {"on_rwy"}
 	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 	local flaprqst = dr_flaprqst[0]
@@ -1594,6 +1762,13 @@ local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 end
 
 local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
+	assert(arpt_id ~= nil)
+	assert(rwy_id ~= nil)
+	assert(hdg ~= nil)
+	assert(rwy_hdg ~= nil)
+	assert(pos_v ~= nil)
+	assert(opp_thr_v ~= nil)
+
 	local now = os.time()
 	local rhdg = math.abs(rel_hdg(hdg, rwy_hdg))
 
@@ -1627,6 +1802,9 @@ local function on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 end
 
 local function stop_check_reset(arpt_id, rwy_id)
+	assert(arpt_id ~= nil)
+	assert(rwy_id ~= nil)
+
 	if accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
 		accel_stop_max_spd[arpt_id .. rwy_id] = nil
 		accel_stop_ann_initial = 0
@@ -1637,6 +1815,9 @@ local function stop_check_reset(arpt_id, rwy_id)
 end
 
 local function takeoff_rwy_dist_check(opp_thr_v, pos_v)
+	assert(opp_thr_v ~= nil)
+	assert(pos_v ~= nil)
+
 	if short_rwy_takeoff_chk then
 		return
 	end
@@ -1650,6 +1831,9 @@ local function takeoff_rwy_dist_check(opp_thr_v, pos_v)
 end
 
 local function perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
+	assert(opp_thr_v ~= nil)
+	assert(pos_v ~= nil)
+
 	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
 	local msg = {}
 
@@ -1680,6 +1864,14 @@ local function perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
 end
 
 local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
+	assert(arpt_id ~= nil)
+	assert(rwy_id ~= nil)
+	assert(hdg ~= nil)
+	assert(rwy_hdg ~= nil)
+	assert(pos_v ~= nil)
+	assert(opp_thr_v ~= nil)
+	assert(len ~= nil)
+
 	local gs = dr_gs[0]
 	local maxspd
 	local dist = vect2_abs(vect2_sub(opp_thr_v, pos_v))
@@ -1742,6 +1934,8 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 end
 
 local function ground_on_runway_aligned_arpt(arpt)
+	assert(arpt ~= nil)
+
 	local on_rwy = false
 	local pos_v = vect2_add(sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"]),
 	    acf_vel_vector(LANDING_ROLLOUT_TIME_FACT))
@@ -1753,15 +1947,15 @@ local function ground_on_runway_aligned_arpt(arpt)
 		if point_in_poly(pos_v, rwy["tora_bbox"]) then
 			on_rwy = true
 			on_rwy_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
-			    pos_v, rwy["t2v"])
+			    pos_v, rwy["dt2v"])
 			on_rwy_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
-			    pos_v, rwy["t1v"])
+			    pos_v, rwy["dt1v"])
 		end
 		if point_in_poly(pos_v, rwy["asda_bbox"]) then
 			stop_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
-			    pos_v, rwy["t2v"], rwy["len"])
+			    pos_v, rwy["dt2v"], rwy["llen1"])
 			stop_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
-			    pos_v, rwy["t1v"], rwy["len"])
+			    pos_v, rwy["dt1v"], rwy["llen2"])
 		else
 			stop_check_reset(arpt_id, rwy["id1"])
 			stop_check_reset(arpt_id, rwy["id2"])
@@ -1810,11 +2004,24 @@ local function ground_on_runway_aligned()
 end
 
 local function gpa_limit(gpa)
+	assert(gpa ~= nil)
 	return math.min(gpa * GPA_TOO_HIGH_FACT, GPA_TOO_HIGH_LIMIT)
 end
 
 local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
     ceil, thickness, msg, ann_table, critical)
+	assert(arpt_id ~= nil)
+	assert(rwy_id ~= nil)
+	assert(alt ~= nil)
+	assert(elev ~= nil)
+	assert(gpa_act ~= nil)
+	assert(rwy_gpa ~= nil)
+	assert(ceil ~= nil)
+	assert(thickness ~= nil)
+	assert(msg ~= nil)
+	assert(ann_table ~= nil)
+	assert(critical ~= nil)
+
 	if not ann_table[arpt_id .. rwy_id] and
 	    alt < elev + ceil and alt > elev + ceil - thickness then
 		logMsg("check at " .. ceil .. "/" .. thickness)
@@ -1825,6 +2032,8 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 			ann_table[arpt_id .. rwy_id] = true
 		elseif rwy_gpa ~= 0 and dr_gear[0] == 1 and
 		    gpa_act > gpa_limit(rwy_gpa) then
+			logMsg("gpa_act: " .. gpa_act .. " gpa_limit: " ..
+			    gpa_limit(rwy_gpa))
 			msg[#msg + 1] = "too_high"
 			msg[#msg + 1] = "too_high"
 			ann_table[arpt_id .. rwy_id] = true
@@ -1834,6 +2043,13 @@ end
 
 local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
     alt)
+	assert(arpt ~= nil)
+	assert(rwy ~= nil)
+	assert(suffix ~= nil)
+	assert(pos_v ~= nil)
+	assert(hdg ~= nil)
+	assert(alt ~= nil)
+
 	local rwy_id = rwy["id" .. suffix]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
@@ -1844,12 +2060,14 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		local msg = {}
 		local msg_prio = MSG_PRIO_MED
 		local thr_v = rwy["t" .. suffix .. "v"]
+		assert(thr_v ~= nil)
 		local dist = vect2_abs(vect2_sub(pos_v, thr_v))
 
 		local rwy_gpa = rwy["gpa" .. suffix]
 		local tch = rwy["tch" .. suffix]
 		local telev = rwy["te" .. suffix]
-		local above_tch = ft2m(dr_baro_alt[0] - (telev + tch))
+		assert(rwy_gpa ~= nil and tch ~= nil and telev ~= nil)
+		local above_tch = ft2m(m2ft(dr_elev[0]) - (telev + tch))
 
 		if RAAS_too_high_enabled and tch ~= 0 and rwy_gpa ~= 0 and
 		    math.abs(elev - telev) < BOGUS_THR_ELEV_LIMIT then
@@ -1881,8 +2099,8 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 					msg[#msg + 1] = "apch"
 
 					rwy_id_to_msg(rwy_id, msg)
-					if rwy["len"] < RAAS_min_landing_dist
-					    then
+					if rwy["llen" .. suffix] <
+					    RAAS_min_landing_dist then
 						msg[#msg + 1] = "caution"
 						msg[#msg + 1] = "short_rwy"
 						msg[#msg + 1] = "short_rwy"
@@ -1902,6 +2120,9 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 end
 
 local function reset_airport_approach_table(tbl, arpt_id)
+	assert(tbl ~= nil)
+	assert(arpt_id ~= nil)
+
 	for id, val in pairs(tbl) do
 		if id:find(arpt_id) == 1 then
 			tbl[id] = nil
@@ -1910,6 +2131,8 @@ local function reset_airport_approach_table(tbl, arpt_id)
 end
 
 local function air_runway_approach_arpt(arpt)
+	assert(arpt ~= nil)
+
 	local alt = dr_baro_alt[0]
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
@@ -2017,10 +2240,10 @@ local function altimeter_setting()
 		    TATL_state == "alt" and
 		    -- The fixed timeout has passed, OR
 		    (now - TATL_transition > ALTIMETER_SETTING_TIMEOUT or
-		    -- The field has a known elelvation and we are within
+		    -- The field has a known elevation and we are within
 		    -- 1500 feet of it
-		    (field_elev and elev) < field_elev +
-		    ALTIMETER_SETTING_ALT_CHK_LIMIT) then
+		    (field_elev and (elev < field_elev +
+		    ALTIMETER_SETTING_ALT_CHK_LIMIT))) then
 			local d_qnh = math.abs(elev - dr_baro_alt[0])
 			local d_qfe
 			if field_elev then
@@ -2200,8 +2423,10 @@ function raas_dbg_draw()
 		draw_bbox(rwy["prox_bbox"])
 		graphics.set_color(1, 0, 0, 1)
 		draw_bbox(rwy["asda_bbox"])
-		graphics.set_color(0, 1, 0, 1)
+		graphics.set_color(1, 1, 0, 1)
 		draw_bbox(rwy["tora_bbox"])
+		graphics.set_color(0, 1, 0, 1)
+		draw_bbox(rwy["rwy_bbox"])
 	end
 
 	graphics.set_color(1, 1, 1, 1)
