@@ -214,8 +214,8 @@ local BOGUS_THR_ELEV_LIMIT = 500		-- feet
 local STD_BARO_REF = 29.92			-- inches of mercury
 local ALTIMETER_SETTING_TIMEOUT = 30		-- seconds
 local ALTIMETER_SETTING_ALT_CHK_LIMIT = 1500	-- feet
-local ALTIMETER_SETTING_QNH_ERR_LIMIT = 100	-- feet
-local ALTIMETER_SETTING_QFE_ERR_LIMIT = 100	-- feet
+local ALTIMETER_SETTING_QNH_ERR_LIMIT = 60	-- feet
+local ALTIMETER_SETTING_QFE_ERR_LIMIT = 60	-- feet
 local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 local IMMEDIATE_STOP_DIST = 50			-- meters
 local GOAROUND_CLB_RATE_THRESH = 450		-- feet per minute
@@ -242,7 +242,7 @@ RAAS_enabled = true
 RAAS_min_engines = 2				-- count
 RAAS_min_mtow = 5700				-- kg
 
-RAAS_debug = 0
+RAAS_debug = {}
 RAAS_debug_graphical = false
 
 RAAS_use_imperial = true
@@ -320,8 +320,10 @@ local arriving = false
 
 local TA = 0
 local TL = 0
+local TATL_field_elev = nil
 local TATL_state = "alt"
 local TATL_transition = -1
+local TATL_source = nil
 
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
@@ -336,6 +338,14 @@ local cur_msg = {}
 local view_is_ext = false
 local bus_loaded = -1
 local last_elev = 0
+
+-- Checks if RAAS_debug has index `category' set to a value of greater than
+-- or equal to `level' and if yes, prints "RAAS_debug[<category>]: <msg>"
+local function debug_log(category, level, msg)
+	if RAAS_debug[category] ~= nil and RAAS_debug[category] >= level then
+		logMsg("RAAS_debug[" .. category .. "]: " .. msg)
+	end
+end
 
 --[[
    Author: Julio ]Manuel Fernandez-Diaz
@@ -480,6 +490,8 @@ local function matrix_mul(x, y, xrows, ycols, sz)
 	return z
 end
 
+-- Splits string `str' at separators `sep' and returns an array of components
+-- (without the separators).
 local function split(str, sep)
 	local res = {}
 	local s = 1
@@ -495,6 +507,8 @@ local function split(str, sep)
 	return res
 end
 
+-- Returns the relative heading between `hdg1' and `hdg2'. A positive return
+-- value indicates a right turn and a negative a left turn.
 local function rel_hdg(hdg1, hdg2)
 	if hdg1 > hdg2 then
 		if hdg1 > hdg2 + 180 then
@@ -520,6 +534,8 @@ local function ft2m(ft)
 	assert(ft ~= nil)
 	return ft / 3.281
 end
+
+-- Basic 2-space vector math. Just read the function names for what they do.
 
 local function vect2_add(a, b)
 	assert(a ~= nil)
@@ -601,11 +617,13 @@ local function vect2_neg(v)
 	return {-v[1], -v[2]}
 end
 
+-- Converts a heading in degrees into a unit direction vector in local space.
 local function hdg2dir(hdg)
 	assert(hdg ~= nil)
 	return {math.sin(math.rad(hdg)), math.cos(math.rad(hdg))}
 end
 
+-- Does the reverse of hdg2dir.
 local function dir2hdg(dir)
 	assert(dir ~= nil)
 	if dir[1] >= 0 and dir[2] >= 0 then
@@ -629,6 +647,14 @@ local function vect2_eq(a, b)
 	return a[1] == b[1] and a[2] == b[2]
 end
 
+-- Checks if two vectors intersect. The vectors are specified by:
+--	`a' Direction & magnitude of first vector.
+--	`oa' Vector pointing to the origin of the first vector.
+--	`b' Direction & magnitude of second vector.
+--	`ob' Vector pointing to the origin of the second vector.
+--	`confined' A boolean flag. If set, intersections are only examined
+--	  on the vectors, otherwise the vectors are considered as if they
+--	  were lines of infinite length.
 local function vect2vect_isect(a, oa, b, ob, confined)
 	assert(a ~= nil)
 	assert(oa ~= nil)
@@ -672,6 +698,11 @@ local function vect2vect_isect(a, oa, b, ob, confined)
 	return res
 end
 
+-- Checks if a vector and a polygon intersect.
+--	`a' Direction & magnitude of first vector.
+--	`oa' Vector pointing to the origin of the first vector.
+--	`poly' An array of 2-space vectors specifying the points on the polygon.
+-- Returns an array of vectors pointing to the intersection points.
 local function vect2poly_isect(a, oa, poly)
 	assert(a ~= nil)
 	assert(oa ~= nil)
@@ -692,6 +723,9 @@ local function vect2poly_isect(a, oa, poly)
 	return res
 end
 
+-- Checks if a point lies inside of a polygon.
+--	`pt' A vector pointing to the position of the point to examine.
+--	`poly' An array of 2-space vectors specifying the points on the polygon.
 local function point_in_poly(pt, poly)
 	assert(pt ~= nil)
 	assert(poly ~= nil)
@@ -704,6 +738,8 @@ local function point_in_poly(pt, poly)
 	local isects = vect2poly_isect(v, pt, poly)
 	return (#isects % 2) ~= 0
 end
+
+-- Basic 3-space vector math. Just read the function names for what they do.
 
 local function vect3_unit(v)
 	assert(v ~= nil)
@@ -745,6 +781,14 @@ local function vect3_dotprod(a, b)
 	return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 end
 
+-- Checks if a 3-space vector intersects with a sphere's surface.
+--	`a' Direction & magnitude of first vector.
+--	`oa' Vector pointing to the origin of the first vector.
+--	`c' A 3-space vector pointing to the center of the sphere.
+--	`r' A scalar indicating the radius of the sphere.
+--	`confined' A boolean flag. If set, intersections are only examined
+--	  on the first vector, otherwise the vector is considered as if it
+--	  were a line of infinite length.
 local function vect2sph_isect(v, o, c, r, confined)
 	assert(v ~= nil)
 	assert(o ~= nil)
@@ -786,6 +830,20 @@ local function vect2sph_isect(v, o, c, r, confined)
 	end
 end
 
+-- Initializes a set of translation matrices to allow conversion between
+-- spherical coordinates (latitude & longitude).
+--	`displac' A relative latitude & longitude of the translation from
+--	  the origin point.
+--	`rot' A rotation to be applied to the coordinate conversion along
+--	  the X axis after the coordinate has been translated to the new
+--	  origin point specified by `displac'.
+--	`inv' A boolean flag indicating if this translation is supposed to
+--	  be an inversion of `displac' and `rot'. This allows constructing
+--	  two exactly opposite translations to convert back and forth
+--	  between two origin points on a sphere:
+--		forward_xlate = sph_xlate_init(displac, rot, false)
+--		backware_xlate = sph_xlate_init(displac, rot, false)
+-- The returned table must be passed to sph_xlate_vect during translation.
 local function sph_xlate_init(displac, rot, inv)
 	assert(displac ~= nil)
 	assert(rot ~= nil)
@@ -847,6 +905,8 @@ local function sph_xlate_init(displac, rot, inv)
 	return xlate
 end
 
+-- Given a 3-space vector, translates it according to the spherical translation
+-- `xlate'.
 local function sph_xlate_vect(p, xlate)
 	assert(p ~= nil)
 	assert(xlate ~= nil)
@@ -859,6 +919,8 @@ local function sph_xlate_vect(p, xlate)
 	return q
 end
 
+-- Given a set of spherical coordinates {latitude, longitude}, converts them
+-- into 3-space ECEF coordinate space. See: https://en.wikipedia.org/wiki/ECEF
 local function sph2ecef(pos)
 	assert(pos ~= nil)
 
@@ -869,17 +931,24 @@ local function sph2ecef(pos)
 	    EARTH_MSL * math.sin(lat_rad)}
 end
 
-local function ortho_fpp_init(center)
+-- Constructs an orthographic sphere-to-flat plane projection centered at
+-- the geographic coordinates at `center'. If the projection shouldn't be
+-- oriented `north-up', pass a non-zero `rot' (in degrees) here.
+local function ortho_fpp_init(center, rot)
 	assert(center ~= nil)
+	assert(rot ~= nil)
 
 	local fpp = {}
 
-	fpp[1] = sph_xlate_init(center, 0, false)
-	fpp[2] = sph_xlate_init(center, 0, true)
+	fpp[1] = sph_xlate_init(center, rot, false)
+	fpp[2] = sph_xlate_init(center, rot, true)
 
 	return fpp
 end
 
+-- Converts a point defined by spherical coordinates `spp' ({latitude,
+-- longitude}) according to the flat-plane-projection `fpp' into a 2-space
+-- vector on the projected plane.
 local function sph2fpp(pos, fpp)
 	assert(pos ~= nil)
 	assert(fpp ~= nil)
@@ -887,6 +956,11 @@ local function sph2fpp(pos, fpp)
 	return {pos_v[2], pos_v[3]}
 end
 
+-- Inverts the projection done by sph2fpp(). Please note that since we only
+-- support orthographic projections, there are always two points that could
+-- correspond to a given projection (since the projection is identical for
+-- points on the opposite side of the sphere). In that case, we assume that
+-- the caller meant the point on the near side of the sphere.
 local function fpp2sph(pos, fpp)
 	assert(pos ~= nil)
 	assert(fpp ~= nil)
@@ -1474,7 +1548,7 @@ local function load_airport(arpt_id)
 	local lat = db_arpt["lat"]
 	local lon = db_arpt["lon"]
 	assert(lat ~= nil and lon ~= nil)
-	local fpp = ortho_fpp_init({lat, lon})
+	local fpp = ortho_fpp_init({lat, lon}, 0)
 	local ecef = sph2ecef({lat, lon})
 	local arpt = {
 	    ["arpt_id"] = arpt_id,
@@ -2183,15 +2257,27 @@ local function altimeter_setting()
 	end
 
 	local cur_arpt = find_closest_curarpt()
-	local field_elev
+	local field_changed = false
 
 	if cur_arpt ~= nil then
+		local arpt_id = cur_arpt["arpt_id"]
+		debug_log("altimeter", 3, "find_closest_curarpt() = " ..
+		    arpt_id)
 		TA = cur_arpt["TA"]
 		TL = cur_arpt["TL"]
-		field_elev = cur_arpt["elev"]
+		TATL_field_elev = cur_arpt["elev"]
+		if arpt_id ~= TATL_source then
+			TATL_source = arpt_id
+			field_changed = true
+			debug_log("altimeter", 1, "TATL_source: " .. arpt_id ..
+			    " TA: " .. TA .. " TL: " .. TL .. " field_elev: " ..
+			    TATL_field_elev)
+		end
 	else
 		local arpt_ref = XPLMFindNavAid(nil, nil, dr_lat[0],
 		    dr_lon[0], nil, xplm_Nav_Airport)
+		debug_log("altimeter", 3, "XPLMFindNavAid() = " ..
+		    tostring(arpt_ref))
 		if arpt_ref ~= nil then
 			local outType, outLat, outLon, outHeight, outFreq,
 			    outHdg, outID, outName = XPLMGetNavAidInfo(arpt_ref)
@@ -2203,12 +2289,23 @@ local function altimeter_setting()
 			    arpt_ecef)) < TATL_REMOTE_ARPT_DIST_LIMIT then
 				TA = db_arpt["TA"]
 				TL = db_arpt["TL"]
-				field_elev = db_arpt["elev"]
+				TATL_field_elev = db_arpt["elev"]
+				if TATL_source ~= outID then
+					TATL_source = outID
+					field_changed = true
+					debug_log("altimeter", 1,
+					    "TATL_source: " .. outID ..
+					    " TA: " .. TA .. " TL: " .. TL ..
+					    " field_elev: " .. TATL_field_elev)
+				end
 			end
 		end
 	end
 
 	if TL == 0 then
+		if field_changed then
+			debug_log("altimeter", 3, "TL = 0")
+		end
 		if TA ~= 0 then
 			if dr_baro_sl[0] > STD_BARO_REF then
 				TL = TA
@@ -2216,9 +2313,15 @@ local function altimeter_setting()
 				local qnh = dr_baro_sl[0] * 33.85
 				TL = TA + 28 * (1013 - qnh)
 			end
+			if field_changed then
+				debug_log("altimeter", 1, "TL(auto) = " .. TL)
+			end
 		end
 	end
 	if TA == 0 then
+		if field_changed then
+			debug_log("altimeter", 1, "TA(auto) = " .. TA)
+		end
 		TA = TL
 	end
 
@@ -2227,11 +2330,17 @@ local function altimeter_setting()
 	if TA ~= 0 and elev > TA and TATL_state == "alt" then
 		TATL_transition = os.time()
 		TATL_state = "fl"
+		debug_log("altimeter", 1, "elev > TA (" .. TA ..
+		    ") transitioning TATL_state = fl")
 	end
 	if TL ~= 0 and elev < TA and dr_baro_alt[0] < TL and
-	    TATL_state == "fl" then
+	    -- If there's a gap between the altitudes and flight levels, don't
+	    -- transition until we're below the TA
+	    (TA == 0 or elev < TA) and TATL_state == "fl" then
 		TATL_transition = os.time()
 		TATL_state = "alt"
+		debug_log("altimeter", 1, "baro_alt < TL (" .. TL ..
+		    ") transitioning TATL_state = alt")
 	end
 
 	local now = os.time()
@@ -2242,26 +2351,29 @@ local function altimeter_setting()
 		    (now - TATL_transition > ALTIMETER_SETTING_TIMEOUT or
 		    -- The field has a known elevation and we are within
 		    -- 1500 feet of it
-		    (field_elev and (elev < field_elev +
+		    (TATL_field_elev ~= nil and (elev < TATL_field_elev +
 		    ALTIMETER_SETTING_ALT_CHK_LIMIT))) then
 			local d_qnh = math.abs(elev - dr_baro_alt[0])
 			local d_qfe
-			if field_elev then
+			if TATL_field_elev ~= nil then
 				d_qfe = math.abs(dr_baro_alt[0] -
-				    (elev - field_elev))
+				    (elev - TATL_field_elev))
 			end
+			debug_log("altimeter", 1, "alt check; d_qnh: " ..
+			    d_qnh .. " d_qfe: " .. tostring(d_qfe))
 			if  -- The set baro is out of bounds for QNH, OR
 			    d_qnh > ALTIMETER_SETTING_QNH_ERR_LIMIT and
 			    -- Field elevation is known and the set baro is
 			    -- out of bounds for QFE
-			    (d_qfe and d_qfe > ALTIMETER_SETTING_QFE_ERR_LIMIT)
-			    then
+			    (d_qfe == nil or
+			    d_qfe > ALTIMETER_SETTING_QFE_ERR_LIMIT) then
 				raas_play_msg({"alt_set"}, MSG_PRIO_LOW)
 			end
 			TATL_transition = -1
 		elseif TATL_state == "fl" and now - TATL_transition >
 		    ALTIMETER_SETTING_TIMEOUT then
 			local d_ref = math.abs(dr_baro_set[0] - STD_BARO_REF)
+			debug_log("altimeter", 1, "fl check; d_ref: " .. d_ref)
 			if d_ref > ALTIMETER_SETTING_BARO_ERR_LIMIT then
 				raas_play_msg({"alt_set"}, MSG_PRIO_LOW)
 			end
