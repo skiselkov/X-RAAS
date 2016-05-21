@@ -2467,7 +2467,7 @@ function raas_is_on()
 end
 
 function raas_exec()
-	local now = now = os.clock()
+	local now = os.clock()
 
 	-- Before we start, wait a set delay, because X-Plane's datarefs
 	-- needed for proper init are unstable, so we'll give them an
