@@ -203,13 +203,14 @@ RAAS advisories:
 
 --]]
 
+local RAAS_EXEC_INTVAL = 0.5			-- seconds
 local HDG_ALIGN_THRESH = 25			-- degrees
 local SPEED_THRESH = 20.5			-- m/s, 40 knots
 local SLOW_ROLL_THRESH = 5.15			-- m/s, 10 knots
 local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
 local RWY_PROXIMITY_LAT_FRACT = 3
-local RWY_PROXIMITY_LON_DISPL = 457		-- meters, 1500 ft
+local RWY_PROXIMITY_LON_DISPL = 609.57		-- meters, 2000 ft
 local RWY_PROXIMITY_TIME_FACT = 2		-- seconds
 local LANDING_ROLLOUT_TIME_FACT = 1		-- seconds
 local RADALT_GRD_THRESH = 5			-- feet
@@ -273,22 +274,22 @@ RAAS_on_rwy_warn_max_n = 3
 -- of knowledge of how X-RAAS handles distance readouts. Thus, you change it
 -- at your own peril.
 RAAS_accel_stop_distances = {
-	-- Because we examine these ranges in 1 second intervals, there is
+	-- Because we examine these ranges in 0.5 second intervals, there is
 	-- a maximum speed at which we are guaranteed to announce the distance
 	-- remaining. The ranges are configured so as to allow for a healthy
 	-- maximum speed margin over anything that could be reasonably attained
 	-- over that portion of the runway.
-	[9000] = {["max"] = 2864, ["min"] = 2743},	-- 9400-9000 ft, 235 KT
-	[8000] = {["max"] = 2560, ["min"] = 2439},	-- 8400-8000 ft, 235 KT
-	[7000] = {["max"] = 2255, ["min"] = 2134},	-- 7400-7000 ft, 235 KT
-	[6000] = {["max"] = 1950, ["min"] = 1828},	-- 6400-6000 ft, 235 KT
-	[5000] = {["max"] = 1645, ["min"] = 1524},	-- 5400-5000 ft, 235 KT
-	[4000] = {["max"] = 1341, ["min"] = 1220},	-- 4400-4000 ft, 235 KT
-	[3000] = {["max"] = 1036, ["min"] = 915},	-- 3400-3000 ft, 235 KT
-	[2000] = {["max"] = 731, ["min"] = 610},	-- 2400-2000 ft, 235 KT
-	[1000] = {["max"] = 426, ["min"] = 305},	-- 1400-1000 ft, 235 KT
-	[500] = {["max"] = 213, ["min"] = 153},		-- 700-500 ft, 118 KT
-	[100] = {["max"] = 60, ["min"] = 31}		-- 200-100 ft, 59 KT
+	[9000] = {["max"] = 2807, ["min"] = 2743},	-- 9200-9000 ft, 250 KT
+	[8000] = {["max"] = 2503, ["min"] = 2439},	-- 8200-8000 ft, 250 KT
+	[7000] = {["max"] = 2198, ["min"] = 2134},	-- 7200-7000 ft, 250 KT
+	[6000] = {["max"] = 1892, ["min"] = 1828},	-- 6200-6000 ft, 250 KT
+	[5000] = {["max"] = 1588, ["min"] = 1524},	-- 5200-5000 ft, 250 KT
+	[4000] = {["max"] = 1284, ["min"] = 1220},	-- 4200-4000 ft, 250 KT
+	[3000] = {["max"] = 1036, ["min"] = 915},	-- 3200-3000 ft, 250 KT
+	[2000] = {["max"] = 674, ["min"] = 610},	-- 2200-2000 ft, 250 KT
+	[1000] = {["max"] = 369, ["min"] = 305},	-- 1200-1000 ft, 250 KT
+	[500] = {["max"] = 185, ["min"] = 153},		-- 600-500 ft, 125 KT
+	[100] = {["max"] = 46, ["min"] = 31}		-- 150-100 ft, 60 KT
 }
 
 RAAS_too_high_enabled = true
@@ -308,6 +309,7 @@ local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
     dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws
 local cur_arpts = {}
 local raas_start_time = nil
+local raas_last_exec_time = nil
 local last_airport_reload = 0
 
 local airport_geo_table = {}
@@ -330,6 +332,7 @@ local accel_stop_max_spd = {}
 local accel_stop_ann_initial = 0
 local departed = false
 local arriving = false
+local landing = false
 
 local TA = 0
 local TL = 0
@@ -1025,7 +1028,8 @@ local function raas_reset()
 	--    "plugin_bus_load_amps")
 	dr_plug_bus_load = {[0] = 0, [1] = 0}
 
-	raas_start_time = os.time()
+	raas_start_time = os.clock()
+	raas_last_exec_time = raas_start_time
 end
 
 -- Given a runway ID, returns the reciprical runway ID.
@@ -1836,11 +1840,13 @@ local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	local flaprqst = dr_flaprqst[0]
 
 	rwy_id_to_msg(rwy_id, msg)
-	if dist < RAAS_min_takeoff_dist and dist_to_msg(dist, msg) then
+	if dist < RAAS_min_takeoff_dist and not landing and
+	    dist_to_msg(dist, msg) then
 		msg[#msg + 1] = "rmng"
 	end
 
-	if flaprqst < RAAS_min_takeoff_flap or flaprqst > RAAS_max_takeoff_flap then
+	if (flaprqst < RAAS_min_takeoff_flap or
+	    flaprqst > RAAS_max_takeoff_flap) and not landing then
 		msg[#msg + 1] = "flaps"
 		msg[#msg + 1] = "flaps"
 	end
@@ -2013,7 +2019,7 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		accel_stop_max_spd[arpt_id .. rwy_id] = gs
 		maxspd = gs
 	end
-	if gs < maxspd - ACCEL_STOP_SPD_THRESH or
+	if gs < maxspd - ACCEL_STOP_SPD_THRESH or landing or
 	    dist < RAAS_min_landing_dist then
 		local msg = {}
 		perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v, msg)
@@ -2072,6 +2078,7 @@ local function ground_on_runway_aligned()
 
 	if not on_rwy then
 		short_rwy_takeoff_chk = false
+		landing = false
 	end
 
 	-- Taxiway takeoff check
@@ -2111,16 +2118,18 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 
 	if not ann_table[arpt_id .. rwy_id] and
 	    alt < elev + ceil and alt > elev + ceil - thickness then
-		logMsg("check at " .. ceil .. "/" .. thickness)
-		logMsg("gpa_act = " .. gpa_act .. " rwy_gpa = " .. rwy_gpa)
+		debug_log("apch_conf_chk", 1, "check at " .. ceil .. "/" ..
+		    thickness)
+		debug_log("apch_conf_chk", 1, "gpa_act = " .. gpa_act ..
+		    " rwy_gpa = " .. rwy_gpa)
 		if dr_flaprqst[0] < RAAS_min_landing_flap then
 			msg[#msg + 1] = "flaps"
 			msg[#msg + 1] = "flaps"
 			ann_table[arpt_id .. rwy_id] = true
 		elseif rwy_gpa ~= 0 and dr_gear[0] == 1 and
 		    gpa_act > gpa_limit(rwy_gpa) then
-			logMsg("gpa_act: " .. gpa_act .. " gpa_limit: " ..
-			    gpa_limit(rwy_gpa))
+			debug_log("apch_conf_chk", 1, "TOO HIGH: gpa_limit = "
+			    .. gpa_limit(rwy_gpa))
 			msg[#msg + 1] = "too_high"
 			msg[#msg + 1] = "too_high"
 			ann_table[arpt_id .. rwy_id] = true
@@ -2220,7 +2229,7 @@ end
 local function air_runway_approach_arpt(arpt)
 	assert(arpt ~= nil)
 
-	local alt = dr_baro_alt[0]
+	local alt = m2ft(dr_elev[0])
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
@@ -2415,10 +2424,6 @@ function raas_is_on()
 	local gen_on = false
 	local turned_on
 
-	if os.time() - raas_start_time < RAAS_STARTUP_DELAY then
-		return false
-	end
-
 	for i = 0, dr_num_engines[0] - 1 do
 		if dr_eng_gen[i] ~= 0 then
 			gen_on = true
@@ -2449,22 +2454,28 @@ function raas_is_on()
 end
 
 function raas_exec()
+	local now = now = os.clock()
+
 	-- Before we start, wait a set delay, because X-Plane's datarefs
 	-- needed for proper init are unstable, so we'll give them an
 	-- extra second to fix themselves
-	if os.time() - raas_start_time < RAAS_STARTUP_DELAY or
+	if now - raas_start_time < RAAS_STARTUP_DELAY or
+	    now - raas_last_exec_time < RAAS_EXEC_INTVAL or
 	    not raas_is_on() then
 		return
 	end
+	raas_last_exec_time = now
 
 	load_nearest_airports(nil)
 
-	-- the '10' addition here is for hysteresis
-	if dr_rad_alt[0] > RADALT_FLARE_THRESH + 10 then
+	if dr_rad_alt[0] > RADALT_FLARE_THRESH then
 		departed = true
 		arriving = true
 		long_landing_ann = false
 	elseif dr_rad_alt[0] < RADALT_GRD_THRESH then
+		if departed then
+			landing = true
+		end
 		departed = false
 		if dr_gs[0] < SPEED_THRESH then
 			arriving = false
@@ -2479,7 +2490,7 @@ function raas_exec()
 	air_runway_approach()
 	altimeter_setting()
 
-	last_elev = dr_elev[0]
+	last_elev = dr_baro_alt[0]
 end
 
 function raas_shutdown()
@@ -2729,7 +2740,7 @@ while nav_ref ~= XPLM_NAV_NOT_FOUND do
 	nav_ref = XPLMGetNextNavAid(nav_ref)
 end
 
-do_often('raas_exec()')
+do_every_frame('raas_exec()')
 do_every_draw('raas_snd_sched()')
 do_on_exit('raas_shutdown()')
 
