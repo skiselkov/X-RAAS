@@ -1,4 +1,16 @@
 --[[
+CDDL HEADER START
+
+This file and its contents are supplied under the terms of the
+Common Development and Distribution License ("CDDL"), version 1.0.
+You may only use this file in accordance with the terms of version
+1.0 of the CDDL.
+
+A full copy of the text of the CDDL should have accompanied this
+source.  A copy of the CDDL is also available via the Internet at
+http://www.illumos.org/license/CDDL.
+
+CDDL HEADER END
 
 RAAS advisories:
 
@@ -208,8 +220,6 @@ local ARPT_RELOAD_INTVAL = 10			-- seconds
 local ARPT_LOAD_LIMIT = 7 * 1852		-- meters, 7nm distance
 local ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
 local STOP_INIT_DELAY = 300
-local GPA_TOO_HIGH_FACT = 1.5			-- multiplier
-local GPA_TOO_HIGH_LIMIT = 8			-- degrees
 local BOGUS_THR_ELEV_LIMIT = 500		-- feet
 local STD_BARO_REF = 29.92			-- inches of mercury
 local ALTIMETER_SETTING_TIMEOUT = 30		-- seconds
@@ -240,7 +250,7 @@ local MSG_PRIO_HIGH = 3
 -- config stuff (to be overridden by acf)
 RAAS_enabled = true
 RAAS_min_engines = 2				-- count
-RAAS_min_mtow = 5700				-- kg
+RAAS_min_MTOW = 5700				-- kg
 
 RAAS_debug = {}
 RAAS_debug_graphical = false
@@ -282,6 +292,9 @@ RAAS_accel_stop_distances = {
 }
 
 RAAS_too_high_enabled = true
+local RAAS_gpa_limit_mult = 1.5			-- multiplier
+local RAAS_gpa_limit_max = 8			-- degrees
+
 RAAS_alt_setting_enabled = true
 
 -- DO NOT CHANGE THIS!
@@ -2079,7 +2092,7 @@ end
 
 local function gpa_limit(gpa)
 	assert(gpa ~= nil)
-	return math.min(gpa * GPA_TOO_HIGH_FACT, GPA_TOO_HIGH_LIMIT)
+	return math.min(gpa * RAAS_gpa_limit_mult, RAAS_gpa_limit_max)
 end
 
 local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
@@ -2676,10 +2689,10 @@ raas_reset()
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
-elseif dr_num_engines[0] < RAAS_min_engines or dr_mtow[0] < RAAS_min_mtow then
+elseif dr_num_engines[0] < RAAS_min_engines or dr_mtow[0] < RAAS_min_MTOW then
 	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS (ICAO: " .. dr_ICAO[0] ..
 	    "; engines: " .. dr_num_engines[0] .. "/" .. RAAS_min_engines ..
-	    "; MTOW: " .. math.floor(dr_mtow[0]) .. "/" .. RAAS_min_mtow .. ")")
+	    "; MTOW: " .. math.floor(dr_mtow[0]) .. "/" .. RAAS_min_MTOW .. ")")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
