@@ -1802,8 +1802,10 @@ local function ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 			end
 			apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
+		return true
 	else
 		apch_rwy_ann[arpt_id .. rwy_id] = nil
+		return false
 	end
 end
 
@@ -1813,20 +1815,32 @@ local function ground_runway_approach_arpt(arpt, vel_v)
 
 	local fpp = arpt["fpp"]
 	local pos_v = sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
+	local in_prox = false
 
 	for i, rwy in pairs(arpt["rwys"]) do
 		local rwy_id = rwy["id1"]
-		ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
-		    vel_v)
+		if ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
+		    vel_v) then
+			in_prox = true
+		end
 	end
+
+	return in_prox
 end
 
 local function ground_runway_approach()
 	local lat, lon = dr_lat[0], dr_lon[0]
 	local vel_v = acf_vel_vector(RWY_PROXIMITY_TIME_FACT)
+	local in_prox = false
 
 	for arpt_id, arpt in pairs(cur_arpts) do
-		ground_runway_approach_arpt(arpt, vel_v)
+		if ground_runway_approach_arpt(arpt, vel_v) then
+			in_prox = true
+		end
+	end
+
+	if not in_prox then
+		landing = false
 	end
 end
 
@@ -2078,7 +2092,6 @@ local function ground_on_runway_aligned()
 
 	if not on_rwy then
 		short_rwy_takeoff_chk = false
-		landing = false
 	end
 
 	-- Taxiway takeoff check
