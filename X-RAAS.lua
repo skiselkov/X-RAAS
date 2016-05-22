@@ -243,6 +243,7 @@ local RWY_APCH_ALT_WINDOW = 250			-- feet
 local TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 local MIN_BUS_VOLT = 11				-- Volts
 local XRAAS_BUS_LOAD_AMPS = 2			-- Amps
+local XRAAS_apt_dat_cache_version = 1
 
 local MSG_PRIO_LOW = 1
 local MSG_PRIO_MED = 2
@@ -1098,7 +1099,7 @@ end
 -- Parses an apt.dat (or X-RAAS_apt_dat.cache) file, parses its contents
 -- and reconstructs our apt_dat table. This is called at the start of
 -- X-RAAS to populate the airport and runway database. The 
-local function map_apt_dat(apt_dat_fname)
+local function map_apt_dat(apt_dat_fname, check_version)
 	assert(apt_dat_fname ~= nil)
 
 	apt_dat_f = io.open(apt_dat_fname)
@@ -1109,12 +1110,25 @@ local function map_apt_dat(apt_dat_fname)
 	local arpt_cnt = 0
 	local apt = nil
 	local icao = nil
+	local line = apt_dat_f:read()
+	local comps
 
-	while true do
-		local line = apt_dat_f:read()
-		if line == nil then
-			break
+	if check_version then
+		if line == nil or line:find("X-RAAS-CACHE ") ~= 1 then
+			return 0
 		end
+		comps = split(line, " ")
+		local version = tonumber(comps[2])
+		if version ~= XRAAS_apt_dat_cache_version then
+			return 0
+		end
+		line = apt_dat_f:read()
+	end
+	if line == nil then
+		return 0
+	end
+
+	repeat
 		if line:find("1 ") == 1 then
 			local comps = split(line, " ")
 			local new_icao = comps[5]
@@ -1192,7 +1206,8 @@ local function map_apt_dat(apt_dat_fname)
 
 			rwys[#rwys + 1] = rwy
 		end
-	end
+		line = apt_dat_f:read()
+	until line == nil
 
 	io.close(apt_dat_f)
 
@@ -1295,13 +1310,15 @@ local function recreate_apt_dat_cache(apt_dat_files)
 
 	-- First scan all the provided apt.dat files
 	for i = 1, #apt_dat_files do
-		map_apt_dat(apt_dat_files[i])
+		map_apt_dat(apt_dat_files[i], false)
 	end
 	load_airports_txt()
 
 	-- And rewrite the cache file
 	local apt_dat_cache_f = io.open(SCRIPT_DIRECTORY ..
 	    "X-RAAS_apt_dat.cache", "w")
+	apt_dat_cache_f:write("X-RAAS-CACHE " .. XRAAS_apt_dat_cache_version ..
+	    "\n")
 	for icao, arpt in pairs(apt_dat) do
 		local rwys = arpt["rwys"]
 		local elev, TA, TL = arpt["elev"], arpt["TA"], arpt["TL"]
@@ -1349,7 +1366,7 @@ end
 -- Scans the cached copy of X-RAAS_apt_dat.cache and if it doesn't exist,
 -- recreates the cache from raw X-Plane navigational and scenery data.
 local function map_apt_dats()
-	if map_apt_dat(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat.cache", apt_dat) == 0
+	if map_apt_dat(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat.cache", true) == 0
 	    then
 		recreate_apt_dat_cache(find_all_apt_dats())
 	end
