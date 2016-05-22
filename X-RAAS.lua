@@ -206,6 +206,7 @@ RAAS advisories:
 local RAAS_EXEC_INTVAL = 0.5			-- seconds
 local HDG_ALIGN_THRESH = 25			-- degrees
 local SPEED_THRESH = 20.5			-- m/s, 40 knots
+local HIGH_SPEED_THRESH = 30.9			-- m/s, 60 knots
 local SLOW_ROLL_THRESH = 5.15			-- m/s, 10 knots
 local STOPPED_THRESH = 1.55			-- m/s, 3 knots
 local EARTH_MSL = 6371000			-- meters
@@ -2112,8 +2113,9 @@ local function ground_on_runway_aligned()
 	end
 
 	-- Taxiway takeoff check
-	if not on_rwy and dr_gs[0] >= SPEED_THRESH and
-	    dr_rad_alt[0] < RADALT_GRD_THRESH then
+	if not on_rwy and dr_rad_alt[0] < RADALT_GRD_THRESH and
+	    ((not landing and dr_gs[0] >= SPEED_THRESH) or
+	    (landing and dr_gs[0] >= HIGH_SPEED_THRESH)) then
 		if not on_twy_ann then
 			on_twy_ann = true
 			raas_play_msg({"caution", "on_twy", "on_twy"},
