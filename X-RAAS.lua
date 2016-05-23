@@ -12,6 +12,8 @@ http://www.illumos.org/license/CDDL.
 
 CDDL HEADER END
 
+Copyright 2016 Saso Kiselkov. All rights reserved.
+
 RAAS advisories:
 
 	1) Altimeter setting during approach
@@ -231,6 +233,9 @@ local ALTIMETER_SETTING_QFE_ERR_LIMIT = 60	-- feet
 local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 local IMMEDIATE_STOP_DIST = 50			-- meters
 local GOAROUND_CLB_RATE_THRESH = 450		-- feet per minute
+local DEPART_CLB_RATE_THRESH = 50		-- feet per minute
+local OFF_RWY_HEIGHT_MAX = 250			-- feet
+local OFF_RWY_HEIGHT_MIN = 150			-- feet
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -263,6 +268,7 @@ RAAS_min_takeoff_dist = 1000			-- meters
 RAAS_min_landing_dist = 800			-- meters
 RAAS_accel_stop_dist_cutoff = 3000		-- meters
 RAAS_voice_female = true
+RAAS_voice_volume = 1.0
 RAAS_min_landing_flap = 0.5			-- ratio
 RAAS_min_takeoff_flap = 0.1			-- ratio
 RAAS_max_takeoff_flap = 0.75			-- ratio
@@ -329,6 +335,7 @@ local long_landing_ann = false
 local short_rwy_takeoff_chk = false
 local on_rwy_timer = -1
 local on_rwy_warnings = 0
+local off_rwy_ann = false
 
 local accel_stop_max_spd = {}
 local accel_stop_ann_initial = 0
@@ -514,7 +521,7 @@ local function split(str, sep)
 	local res = {}
 	local s = 1
 	while true do
-		local e = str:find(sep, s)
+		local e = str:find(sep, s, true)
 		if e == nil then
 			break
 		end
@@ -1034,6 +1041,13 @@ local function raas_reset()
 	raas_last_exec_time = raas_start_time
 end
 
+-- Converts an quantity which is calculated per execution cycle of X-RAAS
+-- into a per-minute quantity, so the caller need not worry about X-RAAS
+-- execution frequency
+local function convert_per_minute(x)
+	return x * (60 / RAAS_EXEC_INTVAL)
+end
+
 -- Given a runway ID, returns the reciprical runway ID.
 local function recip_rwy_id(rwy_id)
 	assert(rwy_id ~= nil)
@@ -1115,7 +1129,7 @@ local function map_apt_dat(apt_dat_fname, check_version)
 	local comps
 
 	if check_version then
-		if line == nil or line:find("X-RAAS-CACHE ") ~= 1 then
+		if line == nil or line:find("X-RAAS-CACHE", 1, true) ~= 1 then
 			return 0
 		end
 		comps = split(line, " ")
@@ -1130,13 +1144,13 @@ local function map_apt_dat(apt_dat_fname, check_version)
 	end
 
 	repeat
-		if line:find("1 ") == 1 then
+		if line:find("1 ", 1, true) == 1 then
 			local comps = split(line, " ")
 			local new_icao = comps[5]
 			local thisTA, thisTL = 0, 0
 
-			if #comps >= 7 and comps[6]:find("TA:") == 1 and
-			    comps[7]:find("TL:") == 1 then
+			if #comps >= 7 and comps[6]:find("TA:", 1, true) == 1
+			    and comps[7]:find("TL:") == 1 then
 				thisTA = tonumber(comps[6]:sub(4))
 				thisTL = tonumber(comps[7]:sub(4))
 			end
@@ -1162,7 +1176,7 @@ local function map_apt_dat(apt_dat_fname, check_version)
 				icao = new_icao
 				apt_dat[icao] = apt
 			end
-		elseif line:find("100 ") == 1 and icao ~= nil then
+		elseif line:find("100 ", 1, true) == 1 and icao ~= nil then
 			local comps = split(line, " ")
 			local width = comps[2]
 			local id1 = comps[8 + 1]
@@ -1181,12 +1195,12 @@ local function map_apt_dat(apt_dat_fname, check_version)
 			local rwy
 
 			if #comps >= 28 and
-			    comps[23]:find("GPA1:") == 1 and
-			    comps[24]:find("GPA2:") == 1 and
-			    comps[25]:find("TCH1:") == 1 and
-			    comps[26]:find("TCH2:") == 1 and
-			    comps[27]:find("TELEV1:") == 1 and
-			    comps[28]:find("TELEV2:") == 1 then
+			    comps[23]:find("GPA1:", 1, true) == 1 and
+			    comps[24]:find("GPA2:", 1, true) == 1 and
+			    comps[25]:find("TCH1:", 1, true) == 1 and
+			    comps[26]:find("TCH2:", 1, true) == 1 and
+			    comps[27]:find("TELEV1:", 1, true) == 1 and
+			    comps[28]:find("TELEV2:", 1, true) == 1 then
 				gpa1 = tonumber(comps[23]:sub(6))
 				gpa2 = tonumber(comps[24]:sub(6))
 				tch1 = tonumber(comps[25]:sub(6))
@@ -1227,7 +1241,7 @@ local function find_all_apt_dats()
 
 	if scenery_packs_ini ~= nil then
 		for line in scenery_packs_ini:lines() do
-			if line:find("SCENERY_PACK ") == 1 then
+			if line:find("SCENERY_PACK ", 1, true) == 1 then
 				local scn_name = line:sub(13)
 				apt_dats[#apt_dats + 1] = RAAS_xpdir ..
 				    scn_name .. DIRECTORY_SEPARATOR ..
@@ -1264,7 +1278,7 @@ local function load_airports_txt()
 	end
 
 	for line in fp:lines() do
-		if line:find("A,") == 1 then
+		if line:find("A,", 1, true) == 1 then
 			local comps = split(line, ",")
 			local icao = comps[2]
 			local TA = tonumber(comps[7])
@@ -1278,7 +1292,7 @@ local function load_airports_txt()
 				last_arpt["TA"] = TA
 				last_arpt["TL"] = TL
 			end
-		elseif line:find("R,") == 1 and last_arpt ~= nil then
+		elseif line:find("R,", 1, true) == 1 and last_arpt ~= nil then
 			local comps = split(line, ",")
 			local rwy_id = comps[2]
 			local telev = tonumber(comps[11])
@@ -2022,8 +2036,8 @@ local function stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	if dr_rad_alt[0] > RADALT_GRD_THRESH then
 		stop_check_reset(arpt_id, rwy_id)
 		if departed and dr_rad_alt[0] <= RADALT_FLARE_THRESH and
-		    m2ft(dr_elev[0] - last_elev) * 60 < GOAROUND_CLB_RATE_THRESH
-		    then
+		    convert_per_minute(m2ft(dr_elev[0] - last_elev)) <
+		    GOAROUND_CLB_RATE_THRESH then
 			if (dist < len / 2 or (dist <= RAAS_min_landing_dist and
 			    len >= RAAS_min_landing_dist)) then
 				if not long_landing_ann then
@@ -2182,9 +2196,11 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
 	local rwy_hdg = rwy["hdg" .. suffix]
+	local in_prox_bbox = point_in_poly(pos_v,
+	    rwy["apch_prox_bbox" .. suffix])
 
-	if point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) and
-	    math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH then
+	if in_prox_bbox and math.abs(rel_hdg(hdg, rwy_hdg)) < HDG_ALIGN_THRESH
+	    then
 		local msg = {}
 		local msg_prio = MSG_PRIO_MED
 		local thr_v = rwy["t" .. suffix .. "v"]
@@ -2241,10 +2257,14 @@ local function air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		if not isemptytable(msg) then
 			raas_play_msg(msg, msg_prio)
 		end
+
+		return true
 	elseif air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
-	    not point_in_poly(pos_v, rwy["apch_prox_bbox" .. suffix]) then
+	    not in_prox_bbox then
 		air_apch_rwy_ann[arpt_id .. rwy_id] = nil
 	end
+
+	return false
 end
 
 local function reset_airport_approach_table(tbl, arpt_id)
@@ -2252,7 +2272,7 @@ local function reset_airport_approach_table(tbl, arpt_id)
 	assert(arpt_id ~= nil)
 
 	for id, val in pairs(tbl) do
-		if id:find(arpt_id) == 1 then
+		if id:find(arpt_id, 1, true) == 1 then
 			tbl[id] = nil
 		end
 	end
@@ -2261,6 +2281,7 @@ end
 local function air_runway_approach_arpt(arpt)
 	assert(arpt ~= nil)
 
+	local in_apch_bbox = false
 	local alt = m2ft(dr_elev[0])
 	local hdg = dr_hdg[0]
 	local arpt_id = arpt["arpt_id"]
@@ -2276,16 +2297,44 @@ local function air_runway_approach_arpt(arpt)
 	local hdg = dr_hdg[0]
 
 	for i, rwy in pairs(arpt["rwys"]) do
-		air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg,
-		    alt)
-		air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v, hdg,
-		    alt)
+		if air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg,
+		    alt) or air_runway_approach_arpt_rwy(arpt, rwy, "2", pos_v,
+		    hdg, alt) or point_in_poly(pos_v, rwy["rwy_bbox"]) then
+			in_apch_bbox = true
+		end
 	end
+
+	return in_apch_bbox
 end
 
 local function air_runway_approach()
+	local in_apch_bbox = false
+	local clb_rate = convert_per_minute(m2ft(dr_elev[0] - last_elev))
+
 	for arpt_id, arpt in pairs(cur_arpts) do
-		air_runway_approach_arpt(arpt)
+		if air_runway_approach_arpt(arpt) then
+			in_apch_bbox = true
+		end
+	end
+
+	-- If we are neither over an approach bbox nor a runway, and we're
+	-- not climbing and gear is down, we're most likely trying to land
+	-- onto something that's not a runway
+	if not in_apch_bbox and clb_rate < DEPART_CLB_RATE_THRESH and
+	    dr_gear[0] == 1 then
+		if dr_rad_alt[0] < OFF_RWY_HEIGHT_MAX then
+			-- only annunciate if we're above the minimum height
+			if dr_rad_alt[0] > OFF_RWY_HEIGHT_MIN and
+			    not off_rwy_ann then
+				raas_play_msg({"caution", "twy", "caution",
+				    "twy"}, MSG_PRIO_HIGH)
+			end
+			off_rwy_ann = true
+		else
+			-- Annunciation gets reset once we climb through
+			-- the maximum annunciation altitude.
+			off_rwy_ann = false
+		end
 	end
 end
 
@@ -2522,7 +2571,7 @@ function raas_exec()
 	air_runway_approach()
 	altimeter_setting()
 
-	last_elev = dr_baro_alt[0]
+	last_elev = dr_elev[0]
 end
 
 function raas_shutdown()
@@ -2618,6 +2667,10 @@ local function load_msg_table()
 		voice_dir = "male"
 	end
 
+	-- Make sure the gain is set in the regular band
+	RAAS_voice_volume = math.max(RAAS_voice_volume, 0.001)
+	RAAS_voice_volume = math.min(RAAS_voice_volume, 1.0)
+
 	for msgid, msg in pairs(messages) do
 		local fname = SCRIPT_DIRECTORY .. "X-RAAS_msgs" ..
 		    DIRECTORY_SEPARATOR .. voice_dir ..
@@ -2627,6 +2680,8 @@ local function load_msg_table()
 
 		snd_f:close()
 		msg["snd"] = load_WAV_file(fname)
+		assert(msg["snd"] ~= nil)
+		set_sound_gain(msg["snd"], RAAS_voice_volume)
 		-- all our sound files are mono, 16-bit, 22.05 kHz, so simply
 		-- estimate the length based on file size (44 bytes is the
 		-- RIFF header)
@@ -2654,7 +2709,7 @@ end
 local function set_sound_on(flag)
 	local val
 	if flag then
-		val = 1
+		val = RAAS_voice_volume
 	else
 		val = 0.001
 	end
@@ -2741,36 +2796,39 @@ else
 	logMsg("X-RAAS: ENABLED")
 end
 
+local function raas_geo_xref_arpts()
+	local nav_ref = XPLMGetFirstNavAid()
+	while nav_ref ~= XPLM_NAV_NOT_FOUND do
+		local outType, lat, lon, elev, freq, hdg, arpt_id, outName =
+		    XPLMGetNavAidInfo(nav_ref)
+		if outType == xplm_Nav_Airport and apt_dat[arpt_id] ~= nil then
+			local arpt = apt_dat[arpt_id]
+			arpt["lat"] = lat
+			arpt["lon"] = lon
+
+			local lat_idx = geo_table_idx(lat)
+			local lon_idx = geo_table_idx(lon)
+
+			local lat_tbl = airport_geo_table[lat_idx]
+			if lat_tbl == nil then
+				lat_tbl = {}
+				airport_geo_table[lat_idx] = lat_tbl
+			end
+			local lon_tbl = lat_tbl[lon_idx]
+			if lon_tbl == nil then
+				lon_tbl = {}
+				lat_tbl[lon_idx] = lon_tbl
+			end
+
+			lon_tbl[arpt_id] = {lat, lon}
+		end
+		nav_ref = XPLMGetNextNavAid(nav_ref)
+	end
+end
+
 load_msg_table()
 map_apt_dats()
-
-local nav_ref = XPLMGetFirstNavAid()
-while nav_ref ~= XPLM_NAV_NOT_FOUND do
-	local outType, lat, lon, elev, freq, hdg, arpt_id, outName =
-	    XPLMGetNavAidInfo(nav_ref)
-	if outType == xplm_Nav_Airport and apt_dat[arpt_id] ~= nil then
-		local arpt = apt_dat[arpt_id]
-		arpt["lat"] = lat
-		arpt["lon"] = lon
-
-		local lat_idx = geo_table_idx(lat)
-		local lon_idx = geo_table_idx(lon)
-
-		local lat_tbl = airport_geo_table[lat_idx]
-		if lat_tbl == nil then
-			lat_tbl = {}
-			airport_geo_table[lat_idx] = lat_tbl
-		end
-		local lon_tbl = lat_tbl[lon_idx]
-		if lon_tbl == nil then
-			lon_tbl = {}
-			lat_tbl[lon_idx] = lon_tbl
-		end
-
-		lon_tbl[arpt_id] = {lat, lon}
-	end
-	nav_ref = XPLMGetNextNavAid(nav_ref)
-end
+raas_geo_xref_arpts()
 
 do_every_frame('raas_exec()')
 do_every_draw('raas_snd_sched()')
