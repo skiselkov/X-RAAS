@@ -233,11 +233,10 @@ local ALTIMETER_SETTING_QFE_ERR_LIMIT = 60	-- feet
 local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 local IMMEDIATE_STOP_DIST = 50			-- meters
 local GOAROUND_CLB_RATE_THRESH = 450		-- feet per minute
-local DEPART_CLB_RATE_THRESH = 50		-- feet per minute
 local OFF_RWY_HEIGHT_MAX = 250			-- feet
-local OFF_RWY_HEIGHT_MIN = 150			-- feet
+local OFF_RWY_HEIGHT_MIN = 130			-- feet
 
-local RWY_APCH_PROXIMITY_LAT_ANGLE = 4		-- degrees
+local RWY_APCH_PROXIMITY_LAT_ANGLE = 3.3	-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
 -- precomputed, since it doesn't change
 local RWY_APCH_PROXIMITY_LAT_DISPL = RWY_APCH_PROXIMITY_LON_DISPL *
@@ -314,7 +313,8 @@ RAAS_xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
     dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
     dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines, dr_mtow,
-    dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws
+    dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws_warn, dr_gear_type,
+    dr_gpws_ann
 local cur_arpts = {}
 local raas_start_time = nil
 local raas_last_exec_time = nil
@@ -1016,6 +1016,7 @@ local function raas_reset()
 	    "tire_z_no_deflection")
 	dr_flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
 	dr_gear = dataref_table("sim/aircraft/parts/acf_gear_deploy")
+	dr_gear_type = dataref_table("sim/aircraft/parts/acf_gear_type")
 	dr_baro_set = dataref_table("sim/cockpit/misc/barometer_setting")
 	dr_baro_sl = dataref_table("sim/weather/barometer_sealevel_inhg")
 	dr_ext_view = dataref_table("sim/graphics/view/view_is_external")
@@ -1026,7 +1027,8 @@ local function raas_reset()
 	dr_ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
 	dr_eng_gen = dataref_table("sim/cockpit/electrical/generator_on")
 	dr_apu_gen = dataref_table("sim/cockpit/electrical/generator_apu_on")
-	dr_gpws = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
+	dr_gpws_warn = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
+	dr_gpws_ann = dataref_table("sim/cockpit2/annunciators/GPWS")
 
 	-- Unfortunately at this moment electrical loading is broken,
 	-- because X-Plane resets plugin_bus_load_amps when the aircraft
@@ -1046,6 +1048,41 @@ end
 -- execution frequency
 local function convert_per_minute(x)
 	return x * (60 / RAAS_EXEC_INTVAL)
+end
+
+-- Returns true if landing gear is fully retracted, false otherwise.
+local function gear_is_up()
+	for i = 0, 9 do
+		if dr_gear_type[i] ~= 0 and dr_gear[i] > 0 then
+			return false
+		end
+	end
+	return true
+end
+
+-- Checks if the aircraft has a terrain override mode on the GPWS and if it
+-- does, returns true if it GPWS terrain warnings are overridden, otherwise
+-- returns false.
+local function gpws_terr_ovrd()
+	if AIRCRAFT_FILENAME:find("757RR", 1, true) == 1 or
+	    AIRCRAFT_FILENAME:find("757PW", 1, true) == 1 then
+		local dr = dataref_table("anim/75/button")
+		return dr[0] == 1
+	end
+	return false
+end
+
+-- Checks if the aircraft has a flaps override mode on the GPWS and if it
+-- does, returns true if it GPWS flaps warnings are overridden, otherwise
+-- returns false. If the aircraft doesn't have a flaps override GPWS mode,
+-- we attempt to also examine if the aircraft has a terrain override mode.
+local function gpws_flaps_ovrd()
+	if AIRCRAFT_FILENAME:find("757RR", 1, true) == 1 or
+	    AIRCRAFT_FILENAME:find("757PW", 1, true) == 1 then
+		local dr = dataref_table("anim/72/button")
+		return dr[0] == 1
+	end
+	return gpws_terr_ovrd()
 end
 
 -- Given a runway ID, returns the reciprical runway ID.
@@ -1892,7 +1929,8 @@ local function perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	end
 
 	if (flaprqst < RAAS_min_takeoff_flap or
-	    flaprqst > RAAS_max_takeoff_flap) and not landing then
+	    flaprqst > RAAS_max_takeoff_flap) and not landing and
+	    not gpws_flaps_ovrd() then
 		msg[#msg + 1] = "flaps"
 		msg[#msg + 1] = "flaps"
 	end
@@ -2169,10 +2207,12 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 		debug_log("apch_conf_chk", 1, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
 		if dr_flaprqst[0] < RAAS_min_landing_flap then
-			msg[#msg + 1] = "flaps"
-			msg[#msg + 1] = "flaps"
+			if not gpws_flaps_ovrd() then
+				msg[#msg + 1] = "flaps"
+				msg[#msg + 1] = "flaps"
+			end
 			ann_table[arpt_id .. rwy_id] = true
-		elseif rwy_gpa ~= 0 and dr_gear[0] == 1 and
+		elseif rwy_gpa ~= 0 and not gear_is_up() and
 		    gpa_act > gpa_limit(rwy_gpa) then
 			debug_log("apch_conf_chk", 1, "TOO HIGH: gpa_limit = "
 			    .. gpa_limit(rwy_gpa))
@@ -2318,14 +2358,14 @@ local function air_runway_approach()
 	end
 
 	-- If we are neither over an approach bbox nor a runway, and we're
-	-- not climbing and gear is down, we're most likely trying to land
-	-- onto something that's not a runway
-	if not in_apch_bbox and clb_rate < DEPART_CLB_RATE_THRESH and
-	    dr_gear[0] == 1 then
+	-- not climbing and we're in a landing configuration, we're most
+	-- likely trying to land onto something that's not a runway
+	if not in_apch_bbox and clb_rate < 0 and not gear_is_up() and
+	    dr_flaprqst[0] >= RAAS_min_landing_flap then
 		if dr_rad_alt[0] < OFF_RWY_HEIGHT_MAX then
 			-- only annunciate if we're above the minimum height
 			if dr_rad_alt[0] > OFF_RWY_HEIGHT_MIN and
-			    not off_rwy_ann then
+			    not off_rwy_ann and not gpws_terr_ovrd() then
 				raas_play_msg({"caution", "twy", "caution",
 				    "twy"}, MSG_PRIO_HIGH)
 			end
@@ -2517,7 +2557,7 @@ function raas_is_on()
 
 	turned_on = (gen_on and (dr_bus_volt[0] > MIN_BUS_VOLT or
 	    dr_bus_volt[1] > MIN_BUS_VOLT) and dr_avionics_on[0] == 1 and
-	    dr_gpws[0] ~= 1)
+	    dr_gpws_warn[0] ~= 1)
 
 	if turned_on then
 		if dr_bus_volt[0] < MIN_BUS_VOLT then
@@ -2691,6 +2731,10 @@ end
 
 function raas_play_msg(msg, prio)
 	assert(prio ~= nil)
+	-- suppress message if GPWS is blaring an alert
+	if dr_gpws_ann[0] ~= 0 then
+		return
+	end
 	if not isemptytable(cur_msg) then
 		if cur_msg["prio"] > prio then
 			return
@@ -2734,8 +2778,8 @@ function raas_snd_sched()
 		view_is_ext = true
 	end
 
-	-- stop audio when power is down
-	if not raas_is_on() then
+	-- stop audio when power is down or if the GPWS is sounding an alert
+	if not raas_is_on() or dr_gpws_ann[0] ~= 0 then
 		if cur_msg["snd"] ~= nil then
 			stop_sound(cur_msg["snd"])
 		end
