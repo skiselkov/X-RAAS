@@ -234,7 +234,7 @@ local ALTIMETER_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 local IMMEDIATE_STOP_DIST = 50			-- meters
 local GOAROUND_CLB_RATE_THRESH = 450		-- feet per minute
 local OFF_RWY_HEIGHT_MAX = 250			-- feet
-local OFF_RWY_HEIGHT_MIN = 130			-- feet
+local OFF_RWY_HEIGHT_MIN = 125			-- feet
 
 local RWY_APCH_PROXIMITY_LAT_ANGLE = 3.3	-- degrees
 local RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -2202,22 +2202,33 @@ local function apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 
 	if not ann_table[arpt_id .. rwy_id] and
 	    alt < elev + ceil and alt > elev + ceil - thickness then
-		debug_log("apch_conf_chk", 1, "check at " .. ceil .. "/" ..
+		debug_log("apch_conf_chk", 2, "check at " .. ceil .. "/" ..
 		    thickness)
-		debug_log("apch_conf_chk", 1, "gpa_act = " .. gpa_act ..
+		debug_log("apch_conf_chk", 2, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
 		if dr_flaprqst[0] < RAAS_min_landing_flap then
+			debug_log("apch_conf_chk", 1, "FLAPS: flaprqst = " ..
+			    dr_flaprqst[0] .. " min_flap = " ..
+			    RAAS_min_landing_flap)
 			if not gpws_flaps_ovrd() then
 				msg[#msg + 1] = "flaps"
 				msg[#msg + 1] = "flaps"
+			else
+				debug_log("apch_conf_chk", 1, "FLAPS: " ..
+				    "flaps ovrd active")
 			end
 			ann_table[arpt_id .. rwy_id] = true
 		elseif rwy_gpa ~= 0 and not gear_is_up() and
 		    gpa_act > gpa_limit(rwy_gpa) then
 			debug_log("apch_conf_chk", 1, "TOO HIGH: gpa_limit = "
 			    .. gpa_limit(rwy_gpa))
-			msg[#msg + 1] = "too_high"
-			msg[#msg + 1] = "too_high"
+			if not gpws_terr_ovrd() then
+				msg[#msg + 1] = "too_high"
+				msg[#msg + 1] = "too_high"
+			else
+				debug_log("apch_conf_chk", 1, "TOO HIGH: " ..
+				    "terr ovrd active")
+			end
 			ann_table[arpt_id .. rwy_id] = true
 		end
 	end
