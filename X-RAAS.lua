@@ -2624,7 +2624,7 @@ function raas.altimeter_setting()
 		    tostring(arpt_ref))
 		if arpt_ref ~= nil then
 			outType, lat, lon, outHeight, outFreq, outHdg,
-			    outID, outName =  = XPLMGetNavAidInfo(arpt_ref)
+			    outID, outName = XPLMGetNavAidInfo(arpt_ref)
 			pos_ecef = raas.conv.sph2ecef({dr.lat[0], dr.lon[0]})
 			arpt_ecef = raas.conv.sph2ecef({lat, lon})
 		end
