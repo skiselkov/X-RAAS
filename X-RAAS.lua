@@ -249,7 +249,8 @@ raas.const.OFF_RWY_HEIGHT_MIN = 125		-- feet
 raas.const.RWY_APCH_PROXIMITY_LAT_ANGLE = 3.3	-- degrees
 raas.const.RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
 -- precomputed, since it doesn't change
-raas.const.RWY_APCH_PROXIMITY_LAT_DISPL = raas.const.RWY_APCH_PROXIMITY_LON_DISPL *
+raas.const.RWY_APCH_PROXIMITY_LAT_DISPL =
+    raas.const.RWY_APCH_PROXIMITY_LON_DISPL *
     math.tan(math.rad(raas.const.RWY_APCH_PROXIMITY_LAT_ANGLE))
 raas.const.RWY_APCH_FLAP1_THRESH = 950		-- feet
 raas.const.RWY_APCH_FLAP2_THRESH = 600		-- feet
@@ -322,9 +323,9 @@ raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
 
 local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
     dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
-    dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines, dr_mtow,
-    dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws_warn, dr_gear_type,
-    dr_gpws_ann
+    dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines,
+    dr_mtow, dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws_warn,
+    dr_gear_type, dr_gpws_ann
 local cur_arpts = {}
 local raas_start_time = nil
 local raas_last_exec_time = nil
@@ -387,7 +388,8 @@ end
    Date:   January 12, 2007
    (For Lua 5.1)
 
-   Modified slightly by RiciLake to avoid the unnecessary table traversal in tablecount()
+   Modified slightly by RiciLake to avoid the unnecessary table traversal
+   in tablecount()
 
    Formats tables with cycles recursively to any depth.
    The output is returned as a string.
@@ -1017,18 +1019,19 @@ function raas.fpp.sph2fpp(pos, fpp)
 	return {pos_v[2], pos_v[3]}
 end
 
--- Inverts the projection done by raas.fpp.sph2fpp(). Please note that since we only
--- support orthographic projections, there are always two points that could
--- correspond to a given projection (since the projection is identical for
--- points on the opposite side of the sphere). In that case, we assume that
--- the caller meant the point on the near side of the sphere.
+-- Inverts the projection done by raas.fpp.sph2fpp(). Please note that since
+-- we only support orthographic projections, there are always two points that
+-- could correspond to a given projection (since the projection is identical
+-- for points on the opposite side of the sphere). In that case, we assume
+-- that the caller meant the point on the near side of the sphere.
 function raas.fpp.fpp2sph(pos, fpp)
 	assert(pos ~= nil)
 	assert(fpp ~= nil)
 
 	local v = {-1000000000, pos[1], pos[2]}
 	local o = {1000000000, 0, 0}
-	local i = raas.vect3.sph_isect(v, o, {0, 0, 0}, raas.const.EARTH_MSL, false)
+	local i = raas.vect3.sph_isect(v, o, {0, 0, 0}, raas.const.EARTH_MSL,
+	    false)
 
 	if n == 0 then
 		return nil
@@ -1167,13 +1170,15 @@ function raas.make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	a = raas.vect2.add(thresh_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
 	    true), width / 2))
 	-- pull it back by `long_displ'
-	a = raas.vect2.add(a, raas.vect2.set_abs(raas.vect2.neg(dir_v), long_displ))
+	a = raas.vect2.add(a, raas.vect2.set_abs(raas.vect2.neg(dir_v),
+	    long_displ))
 
 	-- do the same for the `d' point, but displace to the left
 	d = raas.vect2.add(thresh_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
 	    false), width / 2))
 	-- pull it back by `long_displ'
-	d = raas.vect2.add(d, raas.vect2.set_abs(raas.vect2.neg(dir_v), long_displ))
+	d = raas.vect2.add(d, raas.vect2.set_abs(raas.vect2.neg(dir_v),
+	    long_displ))
 
 	-- points `b' and `c' are along the runway simply as runway len +
 	-- long_displ
@@ -1583,8 +1588,10 @@ function raas.make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 	    raas.const.RWY_APCH_PROXIMITY_LON_DISPL))
 	a = raas.vect2.add(x, raas.vect2.set_abs(raas.vect2.norm(dir_v, true),
 	    width / 2 + raas.const.RWY_APCH_PROXIMITY_LAT_DISPL))
-	b = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.norm(dir_v, true), width / 2))
-	c = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.norm(dir_v, false), width / 2))
+	b = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
+	    true), width / 2))
+	c = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
+	    false), width / 2))
 	d = raas.vect2.add(x, raas.vect2.set_abs(raas.vect2.norm(dir_v, false),
 	    width / 2 + raas.const.RWY_APCH_PROXIMITY_LAT_DISPL))
 
@@ -1603,10 +1610,11 @@ function raas.make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 				-- distance to it from us
 				local lat1, lon1 = orwy["lat1"], orwy["lon1"]
 				assert(lat1 ~= nil and lon1 ~= nil)
-				local othr_v = raas.fpp.sph2fpp({lat1, lon1}, fpp)
+				local othr_v = raas.fpp.sph2fpp({lat1, lon1},
+				    fpp)
 				local v = raas.vect2.sub(othr_v, thr_v)
-				local a = raas.rel_hdg(raas.vect2.dir2hdg(dir_v),
-				    raas.vect2.dir2hdg(v))
+				local a = raas.rel_hdg(raas.vect2.dir2hdg(
+				    dir_v), raas.vect2.dir2hdg(v))
 				local dist = math.abs(math.sin(math.rad(a)) *
 				    raas.vect2.abs(v))
 
@@ -1774,8 +1782,9 @@ function raas.load_airport(arpt_id)
 	return arpt
 end
 
--- The actual worker function for raas.find_nearest_airports. Performs the search
--- in a specified airport_geo_table square. Position is a 3-space ECEF vector.
+-- The actual worker function for raas.find_nearest_airports. Performs the
+-- search in a specified airport_geo_table square. Position is a 3-space
+-- ECEF vector.
 function raas.find_nearest_airports_tile(pos, lat, lon, arpt_list)
 	assert(pos ~= nil)
 	assert(lat ~= nil)
@@ -1789,16 +1798,17 @@ function raas.find_nearest_airports_tile(pos, lat, lon, arpt_list)
 
 	for arpt_id, coords in pairs(tile) do
 		local arpt_pos = raas.conv.sph2ecef(coords)
-		if raas.vect3.abs(raas.vect3.sub(pos, arpt_pos)) < raas.const.ARPT_LOAD_LIMIT then
+		if raas.vect3.abs(raas.vect3.sub(pos, arpt_pos)) <
+		    raas.const.ARPT_LOAD_LIMIT then
 			arpt_list[arpt_id] = coords
 		end
 	end
 end
 
--- Locates all airports within an raas.const.ARPT_LOAD_LIMIT distance limit (in meters)
--- of a geographic reference position. The airports are searched for in the
--- apt_dat database and this function returns a table of airport IDs which
--- matched the search.
+-- Locates all airports within an raas.const.ARPT_LOAD_LIMIT distance limit
+-- (in meters) of a geographic reference position. The airports are searched
+-- for in the apt_dat database and this function returns a table of airport
+-- IDs which matched the search.
 function raas.find_nearest_airports(reflat, reflon)
 	assert(reflat ~= nil)
 	assert(reflon ~= nil)
@@ -2450,12 +2460,14 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		end
 
 		raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch, gpa_act,
-		    rwy_gpa, raas.const.RWY_APCH_FLAP1_THRESH, raas.const.RWY_APCH_ALT_WINDOW, msg,
-		    air_apch_flap1_ann, false)
+		    rwy_gpa, raas.const.RWY_APCH_FLAP1_THRESH,
+		    raas.const.RWY_APCH_ALT_WINDOW, msg, air_apch_flap1_ann,
+		    false)
 		raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch, gpa_act,
 		    rwy_gpa, raas.const.RWY_APCH_FLAP2_THRESH,
 		    raas.const.RWY_APCH_FLAP2_THRESH -
-		    raas.const.RWY_APCH_ALT_THRESH, msg, air_apch_flap2_ann, false)
+		    raas.const.RWY_APCH_ALT_THRESH, msg, air_apch_flap2_ann,
+		    false)
 
 		-- If we are below 470 ft AFE and we haven't annunciated yet
 		if alt < telev + raas.const.RWY_APCH_ALT_THRESH and
@@ -2755,8 +2767,8 @@ function raas_is_on()
 	end
 
 	turned_on = (gen_on and (dr_bus_volt[0] > raas.const.MIN_BUS_VOLT or
-	    dr_bus_volt[1] > raas.const.MIN_BUS_VOLT) and dr_avionics_on[0] == 1 and
-	    dr_gpws_warn[0] ~= 1)
+	    dr_bus_volt[1] > raas.const.MIN_BUS_VOLT) and dr_avionics_on[0] ==
+	    1 and dr_gpws_warn[0] ~= 1)
 
 	if turned_on then
 		if dr_bus_volt[0] < raas.const.MIN_BUS_VOLT then
