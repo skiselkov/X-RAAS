@@ -321,11 +321,7 @@ raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
     DIRECTORY_SEPARATOR .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
     DIRECTORY_SEPARATOR
 
-local dr_gs, dr_baro_alt, dr_rad_alt, dr_lat, dr_lon, dr_elev, dr_hdg,
-    dr_magvar, dr_nw_offset, dr_flaprqst, dr_gear, dr_baro_set, dr_baro_sl,
-    dr_ext_view, dr_bus_volt, dr_avionics_on, dr_ICAO, dr_num_engines,
-    dr_mtow, dr_eng_gen, dr_apu_gen, dr_plug_bus_load, dr_gpws_warn,
-    dr_gear_type, dr_gpws_ann
+local dr = {}
 local cur_arpts = {}
 local raas_start_time = nil
 local raas_last_exec_time = nil
@@ -1042,41 +1038,40 @@ function raas.fpp.fpp2sph(pos, fpp)
 end
 
 function raas.reset()
-	dr_baro_alt = dataref_table("sim/flightmodel/misc/h_ind")
-	dr_rad_alt = dataref_table("sim/cockpit2/gauges/indicators/" ..
+	dr.baro_alt = dataref_table("sim/flightmodel/misc/h_ind")
+	dr.rad_alt = dataref_table("sim/cockpit2/gauges/indicators/" ..
 	    "radio_altimeter_height_ft_pilot")
-	dr_gs = dataref_table("sim/flightmodel/position/groundspeed")
-	dr_lat = dataref_table("sim/flightmodel/position/latitude")
-	dr_lon = dataref_table("sim/flightmodel/position/longitude")
-	dr_elev = dataref_table("sim/flightmodel/position/elevation")
-	dr_hdg = dataref_table("sim/flightmodel/position/true_psi")
-	dr_magvar = dataref_table("sim/flightmodel/position/magnetic_variation")
-	dr_nw_offset = dataref_table("sim/flightmodel/parts/" ..
+	dr.gs = dataref_table("sim/flightmodel/position/groundspeed")
+	dr.lat = dataref_table("sim/flightmodel/position/latitude")
+	dr.lon = dataref_table("sim/flightmodel/position/longitude")
+	dr.elev = dataref_table("sim/flightmodel/position/elevation")
+	dr.hdg = dataref_table("sim/flightmodel/position/true_psi")
+	dr.nw_offset = dataref_table("sim/flightmodel/parts/" ..
 	    "tire_z_no_deflection")
-	dr_flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
-	dr_gear = dataref_table("sim/aircraft/parts/acf_gear_deploy")
-	dr_gear_type = dataref_table("sim/aircraft/parts/acf_gear_type")
-	dr_baro_set = dataref_table("sim/cockpit/misc/barometer_setting")
-	dr_baro_sl = dataref_table("sim/weather/barometer_sealevel_inhg")
-	dr_ext_view = dataref_table("sim/graphics/view/view_is_external")
-	dr_bus_volt = dataref_table("sim/cockpit2/electrical/bus_volts")
-	dr_avionics_on = dataref_table("sim/cockpit/electrical/avionics_on")
-	dr_num_engines = dataref_table("sim/aircraft/engine/acf_num_engines")
-	dr_mtow = dataref_table("sim/aircraft/weight/acf_m_max")
-	dr_ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
-	dr_eng_gen = dataref_table("sim/cockpit/electrical/generator_on")
-	dr_apu_gen = dataref_table("sim/cockpit/electrical/generator_apu_on")
-	dr_gpws_warn = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
-	dr_gpws_ann = dataref_table("sim/cockpit2/annunciators/GPWS")
+	dr.flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
+	dr.gear = dataref_table("sim/aircraft/parts/acf_gear_deploy")
+	dr.gear_type = dataref_table("sim/aircraft/parts/acf_gear_type")
+	dr.baro_set = dataref_table("sim/cockpit/misc/barometer_setting")
+	dr.baro_sl = dataref_table("sim/weather/barometer_sealevel_inhg")
+	dr.ext_view = dataref_table("sim/graphics/view/view_is_external")
+	dr.bus_volt = dataref_table("sim/cockpit2/electrical/bus_volts")
+	dr.avionics_on = dataref_table("sim/cockpit/electrical/avionics_on")
+	dr.num_engines = dataref_table("sim/aircraft/engine/acf_num_engines")
+	dr.mtow = dataref_table("sim/aircraft/weight/acf_m_max")
+	dr.ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
+	dr.eng_gen = dataref_table("sim/cockpit/electrical/generator_on")
+	dr.apu_gen = dataref_table("sim/cockpit/electrical/generator_apu_on")
+	dr.gpws_warn = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
+	dr.gpws_ann = dataref_table("sim/cockpit2/annunciators/GPWS")
 
 	-- Unfortunately at this moment electrical loading is broken,
 	-- because X-Plane resets plugin_bus_load_amps when the aircraft
 	-- is repositioned, making it impossible for us to track our
 	-- electrical laod appropriately. So it's better to disable it,
 	-- than to have it be broken.
-	--dr_plug_bus_load = dataref_table("sim/cockpit2/electrical/" ..
+	--dr.plug_bus_load = dataref_table("sim/cockpit2/electrical/" ..
 	--    "plugin_bus_load_amps")
-	dr_plug_bus_load = {[0] = 0, [1] = 0}
+	dr.plug_bus_load = {[0] = 0, [1] = 0}
 
 	raas_start_time = os.clock()
 	raas_last_exec_time = raas_start_time
@@ -1092,7 +1087,7 @@ end
 -- Returns true if landing gear is fully retracted, false otherwise.
 function raas.gear_is_up()
 	for i = 0, 9 do
-		if dr_gear_type[i] ~= 0 and dr_gear[i] > 0 then
+		if dr.gear_type[i] ~= 0 and dr.gear[i] > 0 then
 			return false
 		end
 	end
@@ -1164,27 +1159,26 @@ function raas.make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	assert(long_displ ~= nil)
 
 	local a, b, c, d, len_displ_v
+	local vect2 = raas.vect2
 
 	-- displace the 'a' point from the runway threshold laterally
 	-- by 1/2 width to the right
-	a = raas.vect2.add(thresh_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
-	    true), width / 2))
+	a = vect2.add(thresh_v, vect2.set_abs(vect2.norm(dir_v, true),
+	    width / 2))
 	-- pull it back by `long_displ'
-	a = raas.vect2.add(a, raas.vect2.set_abs(raas.vect2.neg(dir_v),
-	    long_displ))
+	a = vect2.add(a, vect2.set_abs(vect2.neg(dir_v), long_displ))
 
 	-- do the same for the `d' point, but displace to the left
-	d = raas.vect2.add(thresh_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
-	    false), width / 2))
+	d = vect2.add(thresh_v, vect2.set_abs(vect2.norm(dir_v, false),
+	    width / 2))
 	-- pull it back by `long_displ'
-	d = raas.vect2.add(d, raas.vect2.set_abs(raas.vect2.neg(dir_v),
-	    long_displ))
+	d = vect2.add(d, vect2.set_abs(vect2.neg(dir_v), long_displ))
 
 	-- points `b' and `c' are along the runway simply as runway len +
 	-- long_displ
-	len_displ_v = raas.vect2.set_abs(dir_v, len + long_displ)
-	b = raas.vect2.add(a, len_displ_v)
-	c = raas.vect2.add(d, len_displ_v)
+	len_displ_v = vect2.set_abs(dir_v, len + long_displ)
+	b = vect2.add(a, len_displ_v)
+	c = vect2.add(d, len_displ_v)
 
 	return {a, b, c, d}
 end
@@ -1583,23 +1577,22 @@ function raas.make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 	local x, a, b, b1, c, c1, d
 	local bbox = {}
 	local limit_left, limit_right = 1000000, 1000000
+	local vect2 = raas.vect2
 
-	x = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.neg(dir_v),
+	x = vect2.add(thr_v, vect2.set_abs(vect2.neg(dir_v),
 	    raas.const.RWY_APCH_PROXIMITY_LON_DISPL))
-	a = raas.vect2.add(x, raas.vect2.set_abs(raas.vect2.norm(dir_v, true),
+	a = vect2.add(x, vect2.set_abs(vect2.norm(dir_v, true),
 	    width / 2 + raas.const.RWY_APCH_PROXIMITY_LAT_DISPL))
-	b = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
-	    true), width / 2))
-	c = raas.vect2.add(thr_v, raas.vect2.set_abs(raas.vect2.norm(dir_v,
-	    false), width / 2))
-	d = raas.vect2.add(x, raas.vect2.set_abs(raas.vect2.norm(dir_v, false),
+	b = vect2.add(thr_v, vect2.set_abs(vect2.norm(dir_v, true), width / 2))
+	c = vect2.add(thr_v, vect2.set_abs(vect2.norm(dir_v, false), width / 2))
+	d = vect2.add(x, vect2.set_abs(vect2.norm(dir_v, false),
 	    width / 2 + raas.const.RWY_APCH_PROXIMITY_LAT_DISPL))
 
 	-- If our rwy_id designator contains a L/C/R, then we need to
 	-- look for another parallel runway
 	if #rwy_id >= 3 then
 		local num_id = rwy_id:sub(1, 2)
-		local myhdg = raas.vect2.dir2hdg(dir_v)
+		local myhdg = vect2.dir2hdg(dir_v)
 
 		for i, orwy in pairs(db_rwys) do
 			if (orwy["id1"]:sub(1, 2) == num_id and
@@ -1612,11 +1605,11 @@ function raas.make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 				assert(lat1 ~= nil and lon1 ~= nil)
 				local othr_v = raas.fpp.sph2fpp({lat1, lon1},
 				    fpp)
-				local v = raas.vect2.sub(othr_v, thr_v)
-				local a = raas.rel_hdg(raas.vect2.dir2hdg(
-				    dir_v), raas.vect2.dir2hdg(v))
+				local v = vect2.sub(othr_v, thr_v)
+				local a = raas.rel_hdg(vect2.dir2hdg(dir_v),
+				    vect2.dir2hdg(v))
 				local dist = math.abs(math.sin(math.rad(a)) *
-				    raas.vect2.abs(v))
+				    vect2.abs(v))
 
 				if a < 0 then
 					limit_left = math.min(dist / 2,
@@ -1630,19 +1623,17 @@ function raas.make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 	end
 
 	if limit_left < raas.const.RWY_APCH_PROXIMITY_LAT_DISPL then
-		c1 = raas.vect2.vect_isect(raas.vect2.sub(d, c), c,
-		    raas.vect2.neg(dir_v), raas.vect2.add(thr_v,
-		    raas.vect2.set_abs(raas.vect2.norm(dir_v, false),
+		c1 = vect2.vect_isect(vect2.sub(d, c), c, vect2.neg(dir_v),
+		    vect2.add(thr_v, vect2.set_abs(vect2.norm(dir_v, false),
 		    limit_left)), false)
-		d = raas.vect2.add(x, raas.vect2.set_abs(raas.vect2.norm(
-		    dir_v, false), limit_left))
+		d = vect2.add(x, vect2.set_abs(vect2.norm(dir_v, false),
+		    limit_left))
 	end
 	if limit_right < raas.const.RWY_APCH_PROXIMITY_LAT_DISPL then
-		b1 = raas.vect2.vect_isect(raas.vect2.sub(b, a), a,
-		    raas.vect2.neg(dir_v), raas.vect2.add(thr_v,
-		    raas.vect2.set_abs(raas.vect2.norm(dir_v, true),
+		b1 = vect2.vect_isect(vect2.sub(b, a), a, vect2.neg(dir_v),
+		    vect2.add(thr_v, vect2.set_abs(vect2.norm(dir_v, true),
 		    limit_right)), false)
-		a = raas.vect2.add(x, raas.vect2.set_abs(raas.vect2.norm(dir_v, true),
+		a = vect2.add(x, vect2.set_abs(vect2.norm(dir_v, true),
 		    limit_right))
 	end
 
@@ -1671,6 +1662,7 @@ function raas.load_rwy_info(arpt_id, fpp)
 	local rwys = {}
 	local db_arpt = apt_dat[arpt_id]
 	local db_rwys = db_arpt["rwys"]
+	local vect2 = raas.vect2
 
 	--[[
 	 RAAS runway proximity entry bounding box is defined as:
@@ -1708,16 +1700,15 @@ function raas.load_rwy_info(arpt_id, fpp)
 		local blast2 = db_rwy["bla2"]
 		assert(displ2 ~= nil and blast2 ~= nil)
 
-		local dir_v = raas.vect2.sub(dt2v, dt1v)
-		local dlen = raas.vect2.abs(dir_v)
-		local hdg1 = raas.vect2.dir2hdg(dir_v)
-		local hdg2 = raas.vect2.dir2hdg(raas.vect2.neg(dir_v))
+		local dir_v = vect2.sub(dt2v, dt1v)
+		local dlen = vect2.abs(dir_v)
+		local hdg1 = vect2.dir2hdg(dir_v)
+		local hdg2 = vect2.dir2hdg(vect2.neg(dir_v))
 
-		local t1v = raas.vect2.add(dt1v, raas.vect2.set_abs(dir_v,
-		    displ1))
-		local t2v = raas.vect2.add(dt2v, raas.vect2.set_abs(
-		    raas.vect2.neg(dir_v), displ2))
-		local len = raas.vect2.abs(raas.vect2.sub(t2v, t1v))
+		local t1v = vect2.add(dt1v, vect2.set_abs(dir_v, displ1))
+		local t2v = vect2.add(dt2v, vect2.set_abs(vect2.neg(dir_v),
+		    displ2))
+		local len = vect2.abs(vect2.sub(t2v, t1v))
 
 		local rwy = shallowcopy(db_rwy)
 		rwy["t1v"] = t1v
@@ -1729,8 +1720,8 @@ function raas.load_rwy_info(arpt_id, fpp)
 		rwy["len"] = len
 		rwy["dlen"] = dlen
 		-- landing length, from t1v to dt2v and from t2v to dt1v
-		rwy["llen1"] = raas.vect2.abs(raas.vect2.sub(dt2v, t1v))
-		rwy["llen2"] = raas.vect2.abs(raas.vect2.sub(dt1v, t2v))
+		rwy["llen1"] = vect2.abs(vect2.sub(dt2v, t1v))
+		rwy["llen2"] = vect2.abs(vect2.sub(dt1v, t2v))
 
 		rwy["rwy_bbox"] = raas.make_rwy_bbox(t1v, dir_v, width, len, 0)
 		rwy["tora_bbox"] = raas.make_rwy_bbox(dt1v, dir_v, width, dlen, 0)
@@ -1748,7 +1739,7 @@ function raas.load_rwy_info(arpt_id, fpp)
 		rwy["apch_prox_bbox1"] = raas.make_apch_prox_bbox(db_rwys,
 		    db_rwy["id1"], t1v, width, dir_v, fpp)
 		rwy["apch_prox_bbox2"] = raas.make_apch_prox_bbox(db_rwys,
-		    db_rwy["id2"], t2v, width, raas.vect2.neg(dir_v), fpp)
+		    db_rwy["id2"], t2v, width, vect2.neg(dir_v), fpp)
 
 		rwys[#rwys + 1] = rwy
 	end
@@ -1851,7 +1842,7 @@ function raas.unload_airports_in_tile(lat, lon)
 end
 
 function raas.load_nearest_airport_tiles()
-	local lat, lon = dr_lat[0], dr_lon[0]
+	local lat, lon = dr.lat[0], dr.lon[0]
 
 	for i = -1, 1 do
 		for j = -1, 1 do
@@ -1870,7 +1861,7 @@ function raas.lon_delta(x, y)
 end
 
 function raas.unload_distant_airport_tiles()
-	local lat, lon = geo_table_idx(dr_lat[0], dr_lon[0])
+	local lat, lon = geo_table_idx(dr.lat[0], dr.lon[0])
 
 	for lat_i, lat_tbl in pairs(airport_geo_table) do
 		for lon_i, lon_tbl in pairs(lat_tbl) do
@@ -1901,7 +1892,7 @@ function raas.load_nearest_airports()
 
 	raas.load_nearest_airport_tiles()
 	raas.unload_distant_airport_tiles()
-	local new_arpts = raas.find_nearest_airports(dr_lat[0], dr_lon[0])
+	local new_arpts = raas.find_nearest_airports(dr.lat[0], dr.lon[0])
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		if new_arpts[arpt_id] == nil then
@@ -1920,8 +1911,8 @@ end
 -- actual aircraft's nosewheel position.
 function raas.acf_vel_vector(time_fact)
 	assert(time_fact ~= nil)
-	return raas.vect2.set_abs(raas.vect2.hdg2dir(dr_hdg[0]),
-	    time_fact * dr_gs[0] - dr_nw_offset[0])
+	return raas.vect2.set_abs(raas.vect2.hdg2dir(dr.hdg[0]),
+	    time_fact * dr.gs[0] - dr.nw_offset[0])
 end
 
 -- Determines which of two ends of a runway is closer to the aircraft's
@@ -2041,7 +2032,7 @@ function raas.ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 	    not table.isempty(raas.vect2.poly_isect(vel_v, pos_v, prox_bbox))
 	    then
 		if apch_rwy_ann[arpt_id .. rwy_id] == nil then
-			if dr_gs[0] < raas.const.SPEED_THRESH then
+			if dr.gs[0] < raas.const.SPEED_THRESH then
 				local rwy_name = raas.closest_rwy_end(pos_v,
 				    rwy)
 				local msg = {"apch"}
@@ -2062,7 +2053,7 @@ function raas.ground_runway_approach_arpt(arpt, vel_v)
 	assert(vel_v ~= nil)
 
 	local fpp = arpt["fpp"]
-	local pos_v = raas.fpp.sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
+	local pos_v = raas.fpp.sph2fpp({dr.lat[0], dr.lon[0]}, arpt["fpp"])
 	local in_prox = false
 
 	for i, rwy in pairs(arpt["rwys"]) do
@@ -2079,7 +2070,7 @@ end
 function raas.ground_runway_approach()
 	local in_prox = false
 
-	if dr_rad_alt[0] < raas.const.RADALT_GRD_THRESH then
+	if dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
 		local vel_v = raas.acf_vel_vector(raas.const.RWY_PROXIMITY_TIME_FACT)
 		for arpt_id, arpt in pairs(cur_arpts) do
 			if raas.ground_runway_approach_arpt(arpt, vel_v) then
@@ -2103,7 +2094,7 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 
 	local msg = {"on_rwy"}
 	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
-	local flaprqst = dr_flaprqst[0]
+	local flaprqst = dr.flaprqst[0]
 
 	raas.rwy_id_to_msg(rwy_id, msg)
 	if dist < RAAS_min_takeoff_dist and not landing and
@@ -2154,7 +2145,7 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	end
 
 	if on_rwy_ann[arpt_id .. rwy_id] == nil then
-		if dr_gs[0] < raas.const.SPEED_THRESH then
+		if dr.gs[0] < raas.const.SPEED_THRESH then
 			raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 		end
 		on_rwy_ann[arpt_id .. rwy_id] = true
@@ -2232,7 +2223,7 @@ function raas.stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 	assert(opp_thr_v ~= nil)
 	assert(len ~= nil)
 
-	local gs = dr_gs[0]
+	local gs = dr.gs[0]
 	local maxspd
 	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
 	local rhdg = math.abs(raas.rel_hdg(hdg, rwy_hdg))
@@ -2255,10 +2246,10 @@ function raas.stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		return
 	end
 
-	if dr_rad_alt[0] > raas.const.RADALT_GRD_THRESH then
+	if dr.rad_alt[0] > raas.const.RADALT_GRD_THRESH then
 		raas.stop_check_reset(arpt_id, rwy_id)
-		if departed and dr_rad_alt[0] <= raas.const.RADALT_FLARE_THRESH and
-		    raas.conv_per_min(raas.m2ft(dr_elev[0] - last_elev)) <
+		if departed and dr.rad_alt[0] <= raas.const.RADALT_FLARE_THRESH and
+		    raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev)) <
 		    raas.const.GOAROUND_CLB_RATE_THRESH then
 			if (dist < len / 2 or (dist <= RAAS_min_landing_dist and
 			    len >= RAAS_min_landing_dist)) then
@@ -2298,12 +2289,12 @@ function raas.ground_on_runway_aligned_arpt(arpt)
 	assert(arpt ~= nil)
 
 	local on_rwy = false
-	local pos_v = raas.vect2.add(raas.fpp.sph2fpp({dr_lat[0], dr_lon[0]},
+	local pos_v = raas.vect2.add(raas.fpp.sph2fpp({dr.lat[0], dr.lon[0]},
 	    arpt["fpp"]), raas.acf_vel_vector(
 	    raas.const.LANDING_ROLLOUT_TIME_FACT))
 	local arpt_id = arpt["arpt_id"]
-	local hdg = dr_hdg[0]
-	local airborne = dr_rad_alt[0] > raas.const.RADALT_GRD_THRESH
+	local hdg = dr.hdg[0]
+	local airborne = dr.rad_alt[0] > raas.const.RADALT_GRD_THRESH
 
 	for i, rwy in pairs(arpt["rwys"]) do
 		local rwy_id = rwy["id1"]
@@ -2337,7 +2328,7 @@ function raas.ground_on_runway_aligned()
 		end
 	end
 
-	if on_rwy and dr_gs[0] < raas.const.STOPPED_THRESH then
+	if on_rwy and dr.gs[0] < raas.const.STOPPED_THRESH then
 		if on_rwy_timer == -1 then
 			on_rwy_timer = os.time()
 		end
@@ -2351,16 +2342,16 @@ function raas.ground_on_runway_aligned()
 	end
 
 	-- Taxiway takeoff check
-	if not on_rwy and dr_rad_alt[0] < raas.const.RADALT_GRD_THRESH and
-	    ((not landing and dr_gs[0] >= raas.const.SPEED_THRESH) or
-	    (landing and dr_gs[0] >= raas.const.HIGH_SPEED_THRESH)) then
+	if not on_rwy and dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH and
+	    ((not landing and dr.gs[0] >= raas.const.SPEED_THRESH) or
+	    (landing and dr.gs[0] >= raas.const.HIGH_SPEED_THRESH)) then
 		if not on_twy_ann then
 			on_twy_ann = true
 			raas.play_msg({"caution", "on_twy", "on_twy"},
 			    raas.const.MSG_PRIO_HIGH)
 		end
-	elseif dr_gs[0] < raas.const.SPEED_THRESH or
-	    dr_rad_alt[0] >= raas.const.RADALT_GRD_THRESH then
+	elseif dr.gs[0] < raas.const.SPEED_THRESH or
+	    dr.rad_alt[0] >= raas.const.RADALT_GRD_THRESH then
 		on_twy_ann = false
 	end
 
@@ -2392,9 +2383,9 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 		    thickness)
 		raas.dbg.log("apch_conf_chk", 2, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
-		if dr_flaprqst[0] < RAAS_min_landing_flap then
+		if dr.flaprqst[0] < RAAS_min_landing_flap then
 			raas.dbg.log("apch_conf_chk", 1, "FLAPS: flaprqst = " ..
-			    dr_flaprqst[0] .. " min_flap = " ..
+			    dr.flaprqst[0] .. " min_flap = " ..
 			    RAAS_min_landing_flap)
 			if not raas.gpws_flaps_ovrd() then
 				msg[#msg + 1] = "flaps"
@@ -2448,7 +2439,7 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		local tch = rwy["tch" .. suffix]
 		local telev = rwy["te" .. suffix]
 		assert(rwy_gpa ~= nil and tch ~= nil and telev ~= nil)
-		local above_tch = raas.ft2m(raas.m2ft(dr_elev[0]) -
+		local above_tch = raas.ft2m(raas.m2ft(dr.elev[0]) -
 		    (telev + tch))
 
 		if RAAS_too_high_enabled and tch ~= 0 and rwy_gpa ~= 0 and
@@ -2475,7 +2466,7 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			-- Don't annunciate if we are too low
 			if alt > telev + raas.const.RWY_APCH_ALT_THRESH -
 			    raas.const.RWY_APCH_ALT_WINDOW then
-				if dr_flaprqst[0] < RAAS_min_landing_flap or
+				if dr.flaprqst[0] < RAAS_min_landing_flap or
 				    gpa_act > raas.gpa_limit(rwy_gpa)
 				    then
 					msg[#msg + 1] = "unstable"
@@ -2524,8 +2515,8 @@ function raas.air_runway_approach_arpt(arpt)
 	assert(arpt ~= nil)
 
 	local in_apch_bbox = false
-	local alt = raas.m2ft(dr_elev[0])
-	local hdg = dr_hdg[0]
+	local alt = raas.m2ft(dr.elev[0])
+	local hdg = dr.hdg[0]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
 	if alt > elev + raas.const.RWY_APCH_FLAP1_THRESH or alt < elev then
@@ -2535,8 +2526,8 @@ function raas.air_runway_approach_arpt(arpt)
 		return false
 	end
 
-	local pos_v = raas.fpp.sph2fpp({dr_lat[0], dr_lon[0]}, arpt["fpp"])
-	local hdg = dr_hdg[0]
+	local pos_v = raas.fpp.sph2fpp({dr.lat[0], dr.lon[0]}, arpt["fpp"])
+	local hdg = dr.hdg[0]
 
 	for i, rwy in pairs(arpt["rwys"]) do
 		if raas.air_runway_approach_arpt_rwy(arpt, rwy, "1", pos_v, hdg,
@@ -2550,12 +2541,12 @@ function raas.air_runway_approach_arpt(arpt)
 end
 
 function raas.air_runway_approach()
-	if dr_rad_alt[0] < raas.const.RADALT_GRD_THRESH then
+	if dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
 		return
 	end
 
 	local in_apch_bbox = false
-	local clb_rate = raas.conv_per_min(raas.m2ft(dr_elev[0] - last_elev))
+	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev))
 
 	for arpt_id, arpt in pairs(cur_arpts) do
 		if raas.air_runway_approach_arpt(arpt) then
@@ -2568,10 +2559,10 @@ function raas.air_runway_approach()
 	-- not climbing and we're in a landing configuration, we're most
 	-- likely trying to land onto something that's not a runway
 	if not in_apch_bbox and clb_rate < 0 and not raas.gear_is_up() and
-	    dr_flaprqst[0] >= RAAS_min_landing_flap then
-		if dr_rad_alt[0] < raas.const.OFF_RWY_HEIGHT_MAX then
+	    dr.flaprqst[0] >= RAAS_min_landing_flap then
+		if dr.rad_alt[0] < raas.const.OFF_RWY_HEIGHT_MAX then
 			-- only annunciate if we're above the minimum height
-			if dr_rad_alt[0] > raas.const.OFF_RWY_HEIGHT_MIN and
+			if dr.rad_alt[0] > raas.const.OFF_RWY_HEIGHT_MIN and
 			    not off_rwy_ann and not raas.gpws_terr_ovrd() then
 				raas.play_msg({"caution", "twy", "caution",
 				    "twy"}, raas.const.MSG_PRIO_HIGH)
@@ -2587,7 +2578,7 @@ end
 
 function raas.find_closest_curarpt()
 	local min_dist = raas.const.ARPT_LOAD_LIMIT
-	local pos_ecef = raas.conv.sph2ecef({dr_lat[0], dr_lon[0]})
+	local pos_ecef = raas.conv.sph2ecef({dr.lat[0], dr.lon[0]})
 	local cur_arpt
 
 	for arpt_id, arpt in pairs(cur_arpts) do
@@ -2624,33 +2615,36 @@ function raas.altimeter_setting()
 			    TATL_field_elev)
 		end
 	else
-		local arpt_ref = XPLMFindNavAid(nil, nil, dr_lat[0],
-		    dr_lon[0], nil, xplm_Nav_Airport)
+		local arpt_ref = XPLMFindNavAid(nil, nil, dr.lat[0],
+		    dr.lon[0], nil, xplm_Nav_Airport)
+		local pos_ecef, arpt_ecef, db_arpt
+		local vect3 = raas.vect3
+
 		raas.dbg.log("altimeter", 3, "XPLMFindNavAid() = " ..
 		    tostring(arpt_ref))
 		if arpt_ref ~= nil then
-			local outType, outLat, outLon, outHeight, outFreq,
-			    outHdg, outID, outName = XPLMGetNavAidInfo(arpt_ref)
-			local db_arpt = apt_dat[outID]
-			local pos_ecef = raas.conv.sph2ecef({dr_lat[0],
-			    dr_lon[0]})
-			local arpt_ecef = raas.conv.sph2ecef({outLat, outLon})
+			outType, lat, lon, outHeight, outFreq, outHdg,
+			    outID, outName =  = XPLMGetNavAidInfo(arpt_ref)
+			pos_ecef = raas.conv.sph2ecef({dr.lat[0], dr.lon[0]})
+			arpt_ecef = raas.conv.sph2ecef({lat, lon})
+		end
 
-			if db_arpt ~= nil and raas.vect3.abs(raas.vect3.sub(
-			    pos_ecef, arpt_ecef)) < raas.const.TATL_REMOTE_ARPT_DIST_LIMIT
-			    then
-				TA = db_arpt["TA"]
-				TL = db_arpt["TL"]
-				TATL_field_elev = db_arpt["elev"]
-				if TATL_source ~= outID then
-					TATL_source = outID
-					field_changed = true
-					raas.dbg.log("altimeter", 1,
-					    "TATL_source: " .. outID ..
-					    " TA: " .. TA .. " TL: " .. TL ..
-					    " field_elev: " .. TATL_field_elev)
-				end
-			end
+		if outID ~= nil and TATL_source ~= outID and
+		    vect3.abs(vect3.sub(pos_ecef, arpt_ecef)) <
+		    raas.const.TATL_REMOTE_ARPT_DIST_LIMIT then
+			load_airports_in_tile(lat, lon)
+			db_arpt = apt_dat[outID]
+		end
+
+		if db_arpt ~= nil then
+			TA = db_arpt["TA"]
+			TL = db_arpt["TL"]
+			TATL_field_elev = db_arpt["elev"]
+			TATL_source = outID
+			field_changed = true
+			raas.dbg.log("altimeter", 1, "TATL_source: " .. outID ..
+			    " TA: " .. TA .. " TL: " .. TL .. " field_elev: " ..
+			    TATL_field_elev)
 		end
 	end
 
@@ -2659,10 +2653,10 @@ function raas.altimeter_setting()
 			raas.dbg.log("altimeter", 3, "TL = 0")
 		end
 		if TA ~= 0 then
-			if dr_baro_sl[0] > raas.const.STD_BARO_REF then
+			if dr.baro_sl[0] > raas.const.STD_BARO_REF then
 				TL = TA
 			else
-				local qnh = dr_baro_sl[0] * 33.85
+				local qnh = dr.baro_sl[0] * 33.85
 				TL = TA + 28 * (1013 - qnh)
 			end
 			if field_changed then
@@ -2677,7 +2671,7 @@ function raas.altimeter_setting()
 		TA = TL
 	end
 
-	local elev = raas.m2ft(dr_elev[0])
+	local elev = raas.m2ft(dr.elev[0])
 
 	if TA ~= 0 and elev > TA and TATL_state == "alt" then
 		TATL_transition = os.time()
@@ -2685,7 +2679,7 @@ function raas.altimeter_setting()
 		raas.dbg.log("altimeter", 1, "elev > TA (" .. TA ..
 		    ") transitioning TATL_state = fl")
 	end
-	if TL ~= 0 and elev < TA and dr_baro_alt[0] < TL and
+	if TL ~= 0 and elev < TA and dr.baro_alt[0] < TL and
 	    -- If there's a gap between the altitudes and flight levels, don't
 	    -- transition until we're below the TA
 	    (TA == 0 or elev < TA) and TATL_state == "fl" then
@@ -2705,10 +2699,10 @@ function raas.altimeter_setting()
 		    -- 1500 feet of it
 		    (TATL_field_elev ~= nil and (elev < TATL_field_elev +
 		    raas.const.ALTM_SETTING_ALT_CHK_LIMIT))) then
-			local d_qnh = math.abs(elev - dr_baro_alt[0])
+			local d_qnh = math.abs(elev - dr.baro_alt[0])
 			local d_qfe
 			if TATL_field_elev ~= nil then
-				d_qfe = math.abs(dr_baro_alt[0] -
+				d_qfe = math.abs(dr.baro_alt[0] -
 				    (elev - TATL_field_elev))
 			end
 			raas.dbg.log("altimeter", 1, "alt check; d_qnh: "
@@ -2724,7 +2718,7 @@ function raas.altimeter_setting()
 			TATL_transition = -1
 		elseif TATL_state == "fl" and now - TATL_transition >
 		    raas.const.ALTM_SETTING_TIMEOUT then
-			local d_ref = math.abs(dr_baro_set[0] -
+			local d_ref = math.abs(dr.baro_set[0] -
 			    raas.const.STD_BARO_REF)
 			raas.dbg.log("altimeter", 1, "fl check; d_ref: " ..
 			    d_ref)
@@ -2740,12 +2734,12 @@ end
 function raas_xfer_elec_bus(busnr)
 	local xbusnr = (busnr + 1) % 2
 	if bus_loaded == xbusnr then
-		dr_plug_bus_load[xbusnr] = dr_plug_bus_load[xbusnr] -
+		dr.plug_bus_load[xbusnr] = dr.plug_bus_load[xbusnr] -
 		    raas.const.BUS_LOAD_AMPS
 		bus_loaded = -1
 	end
 	if bus_loaded == -1 then
-		dr_plug_bus_load[busnr] = dr_plug_bus_load[busnr] +
+		dr.plug_bus_load[busnr] = dr.plug_bus_load[busnr] +
 		    raas.const.BUS_LOAD_AMPS
 		bus_loaded = busnr
 	end
@@ -2756,28 +2750,28 @@ function raas_is_on()
 	local gen_on = false
 	local turned_on
 
-	for i = 0, dr_num_engines[0] - 1 do
-		if dr_eng_gen[i] ~= 0 then
+	for i = 0, dr.num_engines[0] - 1 do
+		if dr.eng_gen[i] ~= 0 then
 			gen_on = true
 			break
 		end
 	end
-	if dr_apu_gen[0] ~= 0 then
+	if dr.apu_gen[0] ~= 0 then
 		gen_on = true
 	end
 
-	turned_on = (gen_on and (dr_bus_volt[0] > raas.const.MIN_BUS_VOLT or
-	    dr_bus_volt[1] > raas.const.MIN_BUS_VOLT) and dr_avionics_on[0] ==
-	    1 and dr_gpws_warn[0] ~= 1)
+	turned_on = (gen_on and (dr.bus_volt[0] > raas.const.MIN_BUS_VOLT or
+	    dr.bus_volt[1] > raas.const.MIN_BUS_VOLT) and dr.avionics_on[0] ==
+	    1 and dr.gpws_warn[0] ~= 1)
 
 	if turned_on then
-		if dr_bus_volt[0] < raas.const.MIN_BUS_VOLT then
+		if dr.bus_volt[0] < raas.const.MIN_BUS_VOLT then
 			raas_xfer_elec_bus(1)
 		else
 			raas_xfer_elec_bus(0)
 		end
 	elseif bus_loaded ~= -1 then
-		dr_plug_bus_load[bus_loaded] = dr_plug_bus_load[bus_loaded] -
+		dr.plug_bus_load[bus_loaded] = dr.plug_bus_load[bus_loaded] -
 		    raas.const.BUS_LOAD_AMPS
 		bus_loaded = -1
 	end
@@ -2801,7 +2795,7 @@ function raas.exec()
 
 	raas.load_nearest_airports(nil)
 
-	if dr_rad_alt[0] > raas.const.RADALT_FLARE_THRESH then
+	if dr.rad_alt[0] > raas.const.RADALT_FLARE_THRESH then
 		if not departed then
 			departed = true
 			raas.dbg.log("flt_state", 1, "departed = true")
@@ -2811,18 +2805,18 @@ function raas.exec()
 			raas.dbg.log("flt_state", 1, "arriving = true")
 		end
 		long_landing_ann = false
-	elseif dr_rad_alt[0] < raas.const.RADALT_GRD_THRESH then
+	elseif dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
 		if departed then
 			raas.dbg.log("flt_state", 1, "landing = true")
 			raas.dbg.log("flt_state", 1, "departed = false")
 			landing = true
 		end
 		departed = false
-		if dr_gs[0] < raas.const.SPEED_THRESH then
+		if dr.gs[0] < raas.const.SPEED_THRESH then
 			arriving = false
 		end
 	end
-	if dr_gs[0] < raas.const.SPEED_THRESH then
+	if dr.gs[0] < raas.const.SPEED_THRESH then
 		long_landing_ann = false
 	end
 
@@ -2840,12 +2834,12 @@ function raas.exec()
 		    collectgarbage("count")))
 	end
 
-	last_elev = dr_elev[0]
+	last_elev = dr.elev[0]
 end
 
 function raas.shutdown()
 	if bus_loaded ~= -1 then
-		dr_plug_bus_load[bus_loaded] = dr_plug_bus_load[bus_loaded] -
+		dr.plug_bus_load[bus_loaded] = dr.plug_bus_load[bus_loaded] -
 		    raas.const.BUS_LOAD_AMPS
 		bus_loaded = -1
 	end
@@ -2892,39 +2886,38 @@ function raas.dbg.draw()
 
 	graphics.set_width(2)
 
-	local pos_v = raas.fpp.sph2fpp({dr_lat[0], dr_lon[0]}, cur_arpt["fpp"])
+	local pos_v = raas.fpp.sph2fpp({dr.lat[0], dr.lon[0]}, cur_arpt["fpp"])
 	local vel_v = raas.acf_vel_vector(raas.const.RWY_PROXIMITY_TIME_FACT)
+	local dbg = raas.dbg
 
-	raas.dbg.draw_scale = math.min(650 / raas.vect2.abs(pos_v), 1)
+	dbg.draw_scale = math.min(650 / raas.vect2.abs(pos_v), 1)
 
 	graphics.set_color(1, 0, 0, 1)
-	graphics.draw_line(raas.dbg.x(-5), raas.dbg.y(0),
-	    raas.dbg.x(5), raas.dbg.y(0))
-	graphics.draw_line(raas.dbg.x(0), raas.dbg.y(-5),
-	    raas.dbg.x(0), raas.dbg.y(5))
+	graphics.draw_line(dbg.x(-5), dbg.y(0), dbg.x(5), dbg.y(0))
+	graphics.draw_line(dbg.x(0), dbg.y(-5), dbg.x(0), dbg.y(5))
 
 	for rwy_id, rwy in pairs(cur_arpt["rwys"]) do
 		graphics.set_color(1, 1, 1, 0.5)
-		raas.dbg.draw_bbox(rwy["apch_prox_bbox1"])
-		raas.dbg.draw_bbox(rwy["apch_prox_bbox2"])
+		dbg.draw_bbox(rwy["apch_prox_bbox1"])
+		dbg.draw_bbox(rwy["apch_prox_bbox2"])
 		graphics.set_color(0, 0, 1, 0.67)
-		raas.dbg.draw_bbox(rwy["prox_bbox"])
+		dbg.draw_bbox(rwy["prox_bbox"])
 		graphics.set_color(1, 0, 0, 1)
-		raas.dbg.draw_bbox(rwy["asda_bbox"])
+		dbg.draw_bbox(rwy["asda_bbox"])
 		graphics.set_color(1, 1, 0, 1)
-		raas.dbg.draw_bbox(rwy["tora_bbox"])
+		dbg.draw_bbox(rwy["tora_bbox"])
 		graphics.set_color(0, 1, 0, 1)
-		raas.dbg.draw_bbox(rwy["rwy_bbox"])
+		dbg.draw_bbox(rwy["rwy_bbox"])
 	end
 
 	graphics.set_color(1, 1, 1, 1)
 	local tgt = raas.vect2.add(pos_v, vel_v)
-	graphics.draw_line(raas.dbg.x(pos_v[1]) - 5, raas.dbg.y(pos_v[2]),
-	    raas.dbg.x(pos_v[1]) + 5, raas.dbg.y(pos_v[2]))
-	graphics.draw_line(raas.dbg.x(pos_v[1]), raas.dbg.y(pos_v[2]) - 5,
-	    raas.dbg.x(pos_v[1]), raas.dbg.y(pos_v[2]) + 5)
-	graphics.draw_line(raas.dbg.x(pos_v[1]), raas.dbg.y(pos_v[2]),
-	    raas.dbg.x(tgt[1]), raas.dbg.y(tgt[2]))
+	graphics.draw_line(dbg.x(pos_v[1]) - 5, dbg.y(pos_v[2]),
+	    dbg.x(pos_v[1]) + 5, dbg.y(pos_v[2]))
+	graphics.draw_line(dbg.x(pos_v[1]), dbg.y(pos_v[2]) - 5,
+	    dbg.x(pos_v[1]), dbg.y(pos_v[2]) + 5)
+	graphics.draw_line(dbg.x(pos_v[1]), dbg.y(pos_v[2]),
+	    dbg.x(tgt[1]), dbg.y(tgt[2]))
 
 	graphics.set_width(1)
 end
@@ -2963,7 +2956,7 @@ end
 function raas.play_msg(msg, prio)
 	assert(prio ~= nil)
 	-- suppress message if GPWS is blaring an alert
-	if dr_gpws_ann[0] ~= 0 then
+	if dr.gpws_ann[0] ~= 0 then
 		return
 	end
 	if not table.isempty(cur_msg) then
@@ -3001,16 +2994,16 @@ function raas.snd_sched()
 
 	-- Make sure our messages are only audible when we're inside
 	-- the cockpit and AC power is on
-	if view_is_ext and dr_ext_view[0] == 0 then
+	if view_is_ext and dr.ext_view[0] == 0 then
 		raas.set_sound_on(true)
 		view_is_ext = false
-	elseif not view_is_ext and dr_ext_view[0] == 1 then
+	elseif not view_is_ext and dr.ext_view[0] == 1 then
 		raas.set_sound_on(false)
 		view_is_ext = true
 	end
 
 	-- stop audio when power is down or if the GPWS is sounding an alert
-	if not raas_is_on() or dr_gpws_ann[0] ~= 0 then
+	if not raas_is_on() or dr.gpws_ann[0] ~= 0 then
 		if cur_msg["snd"] ~= nil then
 			stop_sound(cur_msg["snd"])
 		end
@@ -3062,10 +3055,10 @@ raas.reset()
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
-elseif dr_num_engines[0] < RAAS_min_engines or dr_mtow[0] < RAAS_min_MTOW then
-	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS (ICAO: " .. dr_ICAO[0] ..
-	    "; engines: " .. dr_num_engines[0] .. "/" .. RAAS_min_engines ..
-	    "; MTOW: " .. math.floor(dr_mtow[0]) .. "/" .. RAAS_min_MTOW .. ")")
+elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
+	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS (ICAO: " .. dr.ICAO[0] ..
+	    "; engines: " .. dr.num_engines[0] .. "/" .. RAAS_min_engines ..
+	    "; MTOW: " .. math.floor(dr.mtow[0]) .. "/" .. RAAS_min_MTOW .. ")")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
