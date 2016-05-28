@@ -205,6 +205,8 @@ RAAS advisories:
 
 --]]
 
+local DIRSEP
+
 -- function indirection tables
 raas = {}
 raas.dbg = {}
@@ -216,6 +218,11 @@ raas.conv = {}
 raas.fpp = {}
 raas.const = {}
 
+if SYSTEM == "IBM" then
+	DIRSEP = "\\"
+else
+	DIRSEP = "/"
+end
 raas.const.EXEC_INTVAL = 0.5			-- seconds
 raas.const.HDG_ALIGN_THRESH = 25		-- degrees
 raas.const.SPEED_THRESH = 20.5			-- m/s, 40 knots
@@ -317,9 +324,8 @@ local RAAS_gpa_limit_max = 8			-- degrees
 RAAS_alt_setting_enabled = true
 
 -- DO NOT CHANGE THIS!
-raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
-    DIRECTORY_SEPARATOR .. ".." .. DIRECTORY_SEPARATOR .. ".." ..
-    DIRECTORY_SEPARATOR
+raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRSEP .. ".." .. DIRSEP ..
+    ".." .. DIRSEP .. ".." .. DIRSEP
 
 local dr = {}
 local cur_arpts = {}
@@ -1314,25 +1320,23 @@ function raas.find_all_apt_dats()
 	local apt_dats = {}
 
 	local scenery_packs_ini = io.open(raas.const.xpdir ..
-	    "Custom Scenery" .. DIRECTORY_SEPARATOR .. "scenery_packs.ini")
+	    "Custom Scenery" .. DIRSEP .. "scenery_packs.ini")
 
 	if scenery_packs_ini ~= nil then
 		for line in scenery_packs_ini:lines() do
 			if line:find("SCENERY_PACK ", 1, true) == 1 then
 				local scn_name = line:sub(13)
 				apt_dats[#apt_dats + 1] = raas.const.xpdir ..
-				    scn_name .. DIRECTORY_SEPARATOR ..
-				    "Earth nav data" .. DIRECTORY_SEPARATOR ..
-				    "apt.dat"
+				    scn_name .. DIRSEP .. "Earth nav data" ..
+				    DIRSEP .. "apt.dat"
 			end
 		end
 		io.close(scenery_packs_ini)
 	end
 
 	apt_dats[#apt_dats + 1] = raas.const.xpdir .. "Resources" ..
-	    DIRECTORY_SEPARATOR .. "default scenery" .. DIRECTORY_SEPARATOR ..
-	    "default apt dat" .. DIRECTORY_SEPARATOR .. "Earth nav data" ..
-	    DIRECTORY_SEPARATOR .. "apt.dat"
+	    DIRSEP .. "default scenery" .. DIRSEP .. "default apt dat" ..
+	    DIRSEP .. "Earth nav data" .. DIRSEP .. "apt.dat"
 
 	return apt_dats
 end
@@ -1342,9 +1346,8 @@ end
 -- *) transition altitudes & transition levels for the airports
 -- *) runway threshold elevation, glide path angle & threshold crossing height
 function raas.load_airports_txt()
-	local airports_fname = raas.const.xpdir .. "Custom Data" ..
-	    DIRECTORY_SEPARATOR .. "GNS430" .. DIRECTORY_SEPARATOR ..
-	    "navdata" .. DIRECTORY_SEPARATOR .. "Airports.txt"
+	local airports_fname = raas.const.xpdir .. "Custom Data" .. DIRSEP ..
+	    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
 	local fp = io.open(airports_fname)
 	local last_arpt = nil
 
@@ -1399,24 +1402,47 @@ function raas.load_airports_txt()
 end
 
 function raas.os_is_unix()
-	return DIRECTORY_SEPARATOR == "/"
+	return SYSTEM ~= "IBM"
 end
 
 function raas.create_directories(dirnames)
-	local cmd, args
+	local cmd, args = nil, ""
 
-	args = ""
 	for i, dirname in pairs(dirnames) do
 		assert(dirname:find("\"", 1, true) == nil)
-		args = args .. " \"" .. dirname .. "\""
 	end
 	if raas.os_is_unix() then
+		for i, dirname in pairs(dirnames) do
+			args = args .. " \"" .. dirname .. "\""
+		end
 		cmd = "mkdir -p -- " .. args
+		raas.dbg.log("file", 1, "executing: " .. cmd)
+		os.execute(cmd)
 	else
-		cmd = "mkdir " .. args
+		-- Because CMD.EXE on Windows is dumb as a sack of hammers,
+		-- we need to feed it commands in 8191-character increments,
+		-- because NOBODY would ever need more than 8191 characters on
+		-- a line, right?
+		for i, dirname in pairs(dirnames) do
+			-- the 11 character reserve here is for 'mkdir'
+			if #args + #dirname + 3 > 8170 then
+				-- Unfuck any slashes into backslashes to deal
+				-- with FlyWithLua's broken SCRIPT_DIRECTORY
+				args = args:gsub("/", "\\")
+				cmd = "mkdir " .. args
+				raas.dbg.log("file", 1, "executing: " .. cmd)
+				os.execute(cmd)
+				args = ""
+			end
+			args = args .. " \"" .. dirname .. "\""
+		end
+		if args ~= "" then
+			args = args:gsub("/", "\\")
+			cmd = "mkdir " .. args
+			raas.dbg.log("file", 1, "executing: " .. cmd)
+			os.execute(cmd)
+		end
 	end
-
-	local res = os.execute(cmd)
 end
 
 function raas.remove_directory(dirname)
@@ -1427,11 +1453,14 @@ function raas.remove_directory(dirname)
 		assert(dirname:find("/", 1, true) ~= 1 or #dirname > 1)
 		cmd = "rm -rf -- \"" .. dirname .. "\""
 	else
+		dirname = dirname:gsub("/", "\\")
 		assert(dirname:find("[a-zA-Z]:\\") ~= 1 or #dirname > 3)
 		assert(dirname:find("[a-zA-Z]:\\[Ww][Ii][Nn][Dd][Oo][Ww][Ss]")
 		    == nil)
 		cmd = "rd /s /q \"" .. dirname .. "\""
 	end
+
+	raas.dbg.log("file", 1, "executing: " .. cmd)
 	local res = os.execute(cmd)
 end
 
@@ -1439,7 +1468,7 @@ function raas.apt_dat_cache_dir(lat, lon)
 	local lat10 = math.floor(lat / 10) * 10
 	local lon10 = math.floor(lon / 10) * 10
 	return string.format("%s%s%s%03d%s%03d", SCRIPT_DIRECTORY,
-	    "X-RAAS_apt_dat_cache", DIRECTORY_SEPARATOR, lat10, "_", lon10)
+	    "X-RAAS_apt_dat_cache", DIRSEP, lat10, "_", lon10)
 end
 
 function raas.write_apt_dat(icao, arpt)
@@ -1456,8 +1485,7 @@ function raas.write_apt_dat(icao, arpt)
 	end
 
 	local fname = string.format("%s%s%03d_%03d",
-	    raas.apt_dat_cache_dir(lat_idx, lon_idx),
-	    DIRECTORY_SEPARATOR, lat_idx, lon_idx)
+	    raas.apt_dat_cache_dir(lat_idx, lon_idx), DIRSEP, lat_idx, lon_idx)
 	local fp = io.open(fname, "a")
 	assert(fp ~= nil)
 
@@ -1506,7 +1534,7 @@ end
 -- pick this info up.
 function raas.recreate_apt_dat_cache()
 	local version_filename = SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache" ..
-	    DIRECTORY_SEPARATOR .. "version"
+	    DIRSEP .. "version"
 	local version_file = io.open(version_filename)
 	if version_file ~= nil then
 		local version = tonumber(version_file:read("*all"))
@@ -1843,8 +1871,7 @@ function raas.load_airports_in_tile(lat, lon)
 
 	if created then
 		raas.map_apt_dat(string.format("%s%s%03d_%03d",
-		    raas.apt_dat_cache_dir(lat, lon),
-		    DIRECTORY_SEPARATOR, lat, lon), false)
+		    raas.apt_dat_cache_dir(lat, lon), DIRSEP, lat, lon), false)
 	end
 end
 
@@ -2961,9 +2988,8 @@ function raas.load_msg_table()
 	RAAS_voice_volume = math.min(RAAS_voice_volume, 1.0)
 
 	for msgid, msg in pairs(messages) do
-		local fname = SCRIPT_DIRECTORY .. "X-RAAS_msgs" ..
-		    DIRECTORY_SEPARATOR .. voice_dir ..
-		    DIRECTORY_SEPARATOR .. msgid .. ".wav"
+		local fname = SCRIPT_DIRECTORY .. "X-RAAS_msgs" .. DIRSEP ..
+		    voice_dir .. DIRSEP .. msgid .. ".wav"
 		local snd_f = io.open(fname)
 		local sz = snd_f:seek("end")
 
