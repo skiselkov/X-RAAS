@@ -259,7 +259,7 @@ raas.const.RWY_APCH_ALT_WINDOW = 250		-- feet
 raas.const.TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 raas.const.MIN_BUS_VOLT = 11			-- Volts
 raas.const.BUS_LOAD_AMPS = 2			-- Amps
-local XRAAS_apt_dat_cache_version = 1
+local XRAAS_apt_dat_cache_version = 2
 
 raas.const.MSG_PRIO_LOW = 1
 raas.const.MSG_PRIO_MED = 2
@@ -1402,15 +1402,20 @@ function raas.os_is_unix()
 	return DIRECTORY_SEPARATOR == "/"
 end
 
-function raas.create_directory(dirname)
-	local cmd
+function raas.create_directories(dirnames)
+	local cmd, args
 
-	assert(dirname:find("\"", 1, true) == nil)
-	if raas.os_is_unix() then
-		cmd = "mkdir -p -- \"" .. dirname .. "\""
-	else
-		cmd = "md \"" .. dirname .. "\""
+	args = ""
+	for i, dirname in pairs(dirnames) do
+		assert(dirname:find("\"", 1, true) == nil)
+		args = args .. " \"" .. dirname .. "\""
 	end
+	if raas.os_is_unix() then
+		cmd = "mkdir -p -- " .. args
+	else
+		cmd = "mkdir " .. args
+	end
+
 	local res = os.execute(cmd)
 end
 
@@ -1430,6 +1435,13 @@ function raas.remove_directory(dirname)
 	local res = os.execute(cmd)
 end
 
+function raas.apt_dat_cache_dir(lat, lon)
+	local lat10 = math.floor(lat / 10) * 10
+	local lon10 = math.floor(lon / 10) * 10
+	return string.format("%s%s%s%03d%s%03d", SCRIPT_DIRECTORY,
+	    "X-RAAS_apt_dat_cache", DIRECTORY_SEPARATOR, lat10, "_", lon10)
+end
+
 function raas.write_apt_dat(icao, arpt)
 	local rwys = arpt["rwys"]
 	local elev, TA, TL, lat, lon = arpt["elev"], arpt["TA"], arpt["TL"],
@@ -1442,19 +1454,11 @@ function raas.write_apt_dat(icao, arpt)
 	if lat_idx == nil or lon_idx == nil then
 		return
 	end
-	local lat10 = math.floor(lat_idx / 10) * 10
-	local lon10 = math.floor(lon_idx / 10) * 10
 
-	local dirname = string.format("%s%s%s%03d%s%03d",
-	    SCRIPT_DIRECTORY, "X-RAAS_apt_dat_cache", DIRECTORY_SEPARATOR,
-	    lat10, DIRECTORY_SEPARATOR, lon10)
-	local fname = string.format("%s%s%03d_%03d", dirname,
+	local fname = string.format("%s%s%03d_%03d",
+	    raas.apt_dat_cache_dir(lat_idx, lon_idx),
 	    DIRECTORY_SEPARATOR, lat_idx, lon_idx)
 	local fp = io.open(fname, "a")
-	if fp == nil then
-		raas.create_directory(dirname)
-		fp = io.open(fname, "w")
-	end
 	assert(fp ~= nil)
 
 	fp:write("1 " .. elev .. " 0 0 " .. icao ..
@@ -1523,10 +1527,25 @@ function raas.recreate_apt_dat_cache()
 	raas.load_airports_txt()
 
 	raas.remove_directory(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache")
-	raas.create_directory(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache")
+	raas.create_directories({SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache"})
 	version_file = io.open(version_filename, "w")
 	version_file:write(tostring(XRAAS_apt_dat_cache_version))
 	version_file:close()
+
+	local dirs = {}
+	local dir_set = {}
+	for icao, arpt in pairs(apt_dat) do
+		local lat, lon = arpt["lat"], arpt["lon"]
+		if lat ~= nil and lon ~= nil then
+			dir_set[raas.apt_dat_cache_dir(lat, lon)] = true
+		end
+	end
+	for dir, i in pairs(dir_set) do
+		dirs[#dirs + 1] = dir
+	end
+	raas.create_directories(dirs)
+	dir_set = nil
+	dirs = nil
 
 	for icao, arpt in pairs(apt_dat) do
 		if arpt["lat"] ~= nil then
@@ -1823,13 +1842,9 @@ function raas.load_airports_in_tile(lat, lon)
 	lat, lon = geo_table_idx(lat, lon)
 
 	if created then
-		local lat10, lon10
-		lat10 = math.floor(lat / 10) * 10
-		lon10 = math.floor(lon / 10) * 10
-		raas.map_apt_dat(string.format("%s%s%s%03d%s%03d%s%03d_%03d",
-		    SCRIPT_DIRECTORY, "X-RAAS_apt_dat_cache",
-		    DIRECTORY_SEPARATOR, lat10, DIRECTORY_SEPARATOR,
-		    lon10, DIRECTORY_SEPARATOR, lat, lon), false)
+		raas.map_apt_dat(string.format("%s%s%03d_%03d",
+		    raas.apt_dat_cache_dir(lat, lon),
+		    DIRECTORY_SEPARATOR, lat, lon), false)
 	end
 end
 
