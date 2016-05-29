@@ -251,7 +251,7 @@ raas.const.ALTM_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 raas.const.IMMEDIATE_STOP_DIST = 50		-- meters
 raas.const.GOAROUND_CLB_RATE_THRESH = 450	-- feet per minute
 raas.const.OFF_RWY_HEIGHT_MAX = 250		-- feet
-raas.const.OFF_RWY_HEIGHT_MIN = 125		-- feet
+raas.const.OFF_RWY_HEIGHT_MIN = 100		-- feet
 
 raas.const.RWY_APCH_PROXIMITY_LAT_ANGLE = 3.3	-- degrees
 raas.const.RWY_APCH_PROXIMITY_LON_DISPL = 5500	-- meters
@@ -261,8 +261,14 @@ raas.const.RWY_APCH_PROXIMITY_LAT_DISPL =
     math.tan(math.rad(raas.const.RWY_APCH_PROXIMITY_LAT_ANGLE))
 raas.const.RWY_APCH_FLAP1_THRESH = 950		-- feet
 raas.const.RWY_APCH_FLAP2_THRESH = 600		-- feet
-raas.const.RWY_APCH_ALT_THRESH = 470		-- feet
-raas.const.RWY_APCH_ALT_WINDOW = 250		-- feet
+raas.const.RWY_APCH_FLAP3_THRESH = 450		-- feet
+raas.const.RWY_APCH_FLAP4_THRESH = 300		-- feet
+raas.const.RWY_APCH_ALT_MAX = 700		-- feet
+raas.const.RWY_APCH_ALT_MIN = 320		-- feet
+raas.const.RWY_APCH_SUPP_WINDOWS = {		-- suppress 'approaching'
+    {["max"] = 520, ["min"] = 480},		-- annunciations in these
+    {["max"] = 420, ["min"] = 380},		-- altitude windows
+}
 raas.const.TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 raas.const.MIN_BUS_VOLT = 11			-- Volts
 raas.const.BUS_LOAD_AMPS = 2			-- Amps
@@ -343,6 +349,7 @@ local apch_rwy_ann = {}
 local air_apch_rwy_ann = {}
 local air_apch_flap1_ann = {}
 local air_apch_flap2_ann = {}
+local air_apch_flap3_ann = {}
 local on_twy_ann = false
 local long_landing_ann = false
 local short_rwy_takeoff_chk = false
@@ -1041,6 +1048,22 @@ function raas.fpp.fpp2sph(pos, fpp)
 	r = raas.xlate.sph_vect(i[1], fpp[2])
 
 	return ecef2sph(r)
+end
+
+-- Returns true if `x' is within the numerical ranges in `rngs', which is an
+-- array containings tables of this format:
+--	{
+--		{["max"] = range_upper_value, ["min"] = range_lower_value},
+--		... <etc> ...
+--	}
+-- The range check is inclusive.
+function raas.number_in_rngs(x, rngs)
+	for i, rng in pairs(rngs) do
+		if x <= rng["max"] and x >= rng["min"] then
+			return true
+		end
+	end
+	return false
 end
 
 function raas.reset()
@@ -2412,7 +2435,7 @@ function raas.gpa_limit(gpa)
 end
 
 function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
-    ceil, thickness, msg, ann_table, critical)
+    ceil, floor, msg, ann_table, critical)
 	assert(arpt_id ~= nil)
 	assert(rwy_id ~= nil)
 	assert(alt ~= nil)
@@ -2420,15 +2443,15 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 	assert(gpa_act ~= nil)
 	assert(rwy_gpa ~= nil)
 	assert(ceil ~= nil)
-	assert(thickness ~= nil)
+	assert(floor ~= nil)
 	assert(msg ~= nil)
 	assert(ann_table ~= nil)
 	assert(critical ~= nil)
 
 	if not ann_table[arpt_id .. rwy_id] and
-	    alt < elev + ceil and alt > elev + ceil - thickness then
+	    alt - elev < ceil and alt - elev > floor then
 		raas.dbg.log("apch_conf_chk", 2, "check at " .. ceil .. "/" ..
-		    thickness)
+		    floor)
 		raas.dbg.log("apch_conf_chk", 2, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
 		if dr.flaprqst[0] < RAAS_min_landing_flap then
@@ -2436,27 +2459,41 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 			    "flaprqst = " .. dr.flaprqst[0] ..
 			    " min_flap = " .. RAAS_min_landing_flap)
 			if not raas.gpws_flaps_ovrd() then
-				msg[#msg + 1] = "flaps"
-				msg[#msg + 1] = "flaps"
+				if not critical then
+					msg[#msg + 1] = "flaps"
+					msg[#msg + 1] = "flaps"
+				else
+					msg[#msg + 1] = "unstable"
+					msg[#msg + 1] = "unstable"
+				end
 			else
 				raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
 				    "flaps ovrd active")
 			end
 			ann_table[arpt_id .. rwy_id] = true
+			return true
 		elseif rwy_gpa ~= 0 and not raas.gear_is_up() and
 		    gpa_act > raas.gpa_limit(rwy_gpa) then
 			raas.dbg.log("apch_conf_chk", 1, "TOO HIGH: " ..
 			    "gpa_limit = " .. raas.gpa_limit(rwy_gpa))
 			if not raas.gpws_terr_ovrd() then
-				msg[#msg + 1] = "too_high"
-				msg[#msg + 1] = "too_high"
+				if not critical then
+					msg[#msg + 1] = "too_high"
+					msg[#msg + 1] = "too_high"
+				else
+					msg[#msg + 1] = "unstable"
+					msg[#msg + 1] = "unstable"
+				end
 			else
 				raas.dbg.log("apch_conf_chk", 1,
 				    "TOO HIGH: " .. "terr ovrd active")
 			end
 			ann_table[arpt_id .. rwy_id] = true
+			return true
 		end
 	end
+
+	return false
 end
 
 function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
@@ -2498,41 +2535,39 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			gpa_act = 0
 		end
 
-		raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
+		if raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP1_THRESH,
-		    raas.const.RWY_APCH_ALT_WINDOW, msg, air_apch_flap1_ann,
-		    false)
-		raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
+		    raas.const.RWY_APCH_FLAP2_THRESH, msg, air_apch_flap1_ann,
+		    false) or
+		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP2_THRESH,
-		    raas.const.RWY_APCH_FLAP2_THRESH -
-		    raas.const.RWY_APCH_ALT_THRESH, msg, air_apch_flap2_ann,
-		    false)
+		    raas.const.RWY_APCH_FLAP3_THRESH, msg, air_apch_flap2_ann,
+		    false) or
+		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
+		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP3_THRESH,
+		    raas.const.RWY_APCH_FLAP4_THRESH, msg, air_apch_flap3_ann,
+		    true) then
+			msg_prio = raas.const.MSG_PRIO_HIGH
+		end
 
-		-- If we are below 470 ft AFE and we haven't annunciated yet
-		if alt < telev + raas.const.RWY_APCH_ALT_THRESH and
-		    air_apch_rwy_ann[arpt_id .. rwy_id] == nil then
+		-- If we are below 700 ft AFE and we haven't annunciated yet
+		if alt - telev < raas.const.RWY_APCH_ALT_MAX and
+		    air_apch_rwy_ann[arpt_id .. rwy_id] == nil and
+		    not raas.number_in_rngs(alt - telev,
+		    raas.const.RWY_APCH_SUPP_WINDOWS) then
 			-- Don't annunciate if we are too low
-			if alt > telev + raas.const.RWY_APCH_ALT_THRESH -
-			    raas.const.RWY_APCH_ALT_WINDOW then
-				if dr.flaprqst[0] < RAAS_min_landing_flap or
-				    gpa_act > raas.gpa_limit(rwy_gpa)
-				    then
-					msg[#msg + 1] = "unstable"
-					msg[#msg + 1] = "unstable"
+			if alt - telev > raas.const.RWY_APCH_ALT_MIN then
+				msg[#msg + 1] = "apch"
+				raas.rwy_id_to_msg(rwy_id, msg)
+				if rwy["llen" .. suffix] <
+				    RAAS_min_landing_dist then
+					msg[#msg + 1] = "caution"
+					msg[#msg + 1] = "short_rwy"
+					msg[#msg + 1] = "short_rwy"
 					msg_prio = raas.const.MSG_PRIO_HIGH
-				else
-					msg[#msg + 1] = "apch"
-
-					raas.rwy_id_to_msg(rwy_id, msg)
-					if rwy["llen" .. suffix] <
-					    RAAS_min_landing_dist then
-						msg[#msg + 1] = "caution"
-						msg[#msg + 1] = "short_rwy"
-						msg[#msg + 1] = "short_rwy"
-					end
 				end
-				air_apch_rwy_ann[arpt_id .. rwy_id] = true
 			end
+			air_apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
 
 		if not table.isempty(msg) then
@@ -2609,9 +2644,9 @@ function raas.air_runway_approach()
 	-- likely trying to land onto something that's not a runway
 	if not in_apch_bbox and clb_rate < 0 and not raas.gear_is_up() and
 	    dr.flaprqst[0] >= RAAS_min_landing_flap then
-		if dr.rad_alt[0] < raas.const.OFF_RWY_HEIGHT_MAX then
+		if dr.rad_alt[0] <= raas.const.OFF_RWY_HEIGHT_MAX then
 			-- only annunciate if we're above the minimum height
-			if dr.rad_alt[0] > raas.const.OFF_RWY_HEIGHT_MIN and
+			if dr.rad_alt[0] >= raas.const.OFF_RWY_HEIGHT_MIN and
 			    not off_rwy_ann and not raas.gpws_terr_ovrd() then
 				raas.play_msg({"caution", "twy", "caution",
 				    "twy"}, raas.const.MSG_PRIO_HIGH)
