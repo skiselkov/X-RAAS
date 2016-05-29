@@ -3142,9 +3142,12 @@ if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
 elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
-	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS (ICAO: " .. dr.ICAO[0] ..
-	    "; engines: " .. dr.num_engines[0] .. "/" .. RAAS_min_engines ..
-	    "; MTOW: " .. math.floor(dr.mtow[0]) .. "/" .. RAAS_min_MTOW .. ")")
+	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS\n" ..
+	    "  THIS AIRCRAFT: ICAO: " .. dr.ICAO[0] .. "; engines: " ..
+	    dr.num_engines[0] .. "; MTOW: " .. math.floor(dr.mtow[0]) ..
+	    " kg\n" ..
+	    "  X-RAAS CONFIG: RAAS_min_engines: " .. RAAS_min_engines ..
+	    "; RAAS_min_MTOW: " ..RAAS_min_MTOW .. " kg")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
@@ -3155,7 +3158,11 @@ raas.map_apt_dats()
 
 do_every_frame('raas.exec()')
 do_every_draw('raas.snd_sched()')
-do_on_exit('raas.shutdown()')
+
+-- FlyWithLua prior to 2.4.1 didn't have do_on_exit
+if do_on_exit ~= nil then
+	do_on_exit('raas.shutdown()')
+end
 
 -- Uncomment the line below to get a nice debug display
 if RAAS_debug_graphical then
