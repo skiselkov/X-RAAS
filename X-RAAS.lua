@@ -282,9 +282,6 @@ RAAS_enabled = true
 RAAS_min_engines = 2				-- count
 RAAS_min_MTOW = 5700				-- kg
 
-RAAS_debug = {}
-RAAS_debug_graphical = false
-
 RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
 RAAS_min_landing_dist = 800			-- meters
@@ -293,6 +290,7 @@ RAAS_min_rotation_angle = 3			-- degrees
 RAAS_accel_stop_dist_cutoff = 3000		-- meters
 RAAS_voice_female = true
 RAAS_voice_volume = 1.0
+RAAS_disable_ext_view = true
 RAAS_min_landing_flap = 0.5			-- ratio
 RAAS_min_takeoff_flap = 0.1			-- ratio
 RAAS_max_takeoff_flap = 0.75			-- ratio
@@ -331,6 +329,11 @@ local RAAS_gpa_limit_max = 8			-- degrees
 RAAS_alt_setting_enabled = true
 RAAS_qnh_alt_enabled = true
 RAAS_qfe_alt_enabled = false
+
+-- Debug settings. These aren't documented, as they're rather advanced.
+RAAS_debug = {}
+RAAS_debug_graphical = false
+RAAS_debug_graphical_bg = 0
 
 -- DO NOT CHANGE THIS!
 raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRSEP .. ".." .. DIRSEP ..
@@ -2741,7 +2744,7 @@ function raas.altimeter_setting()
 		if outID ~= nil and TATL_source ~= outID and
 		    vect3.abs(vect3.sub(pos_ecef, arpt_ecef)) <
 		    const.TATL_REMOTE_ARPT_DIST_LIMIT then
-			load_airports_in_tile(lat, lon)
+			raas.load_airports_in_tile(lat, lon)
 			db_arpt = apt_dat[outID]
 		end
 
@@ -2963,12 +2966,12 @@ end
 raas.dbg.draw_scale = 0.1
 
 function raas.dbg.x(coord)
-	local offx = 1280
+	local offx = SCREEN_WIDTH / 2
 	return coord * raas.dbg.draw_scale + offx
 end
 
 function raas.dbg.y(coord)
-	local offy = 768
+	local offy = SCREEN_HIGHT / 2
 	return coord * raas.dbg.draw_scale + offy
 end
 
@@ -2995,13 +2998,18 @@ function raas.dbg.draw()
 		return
 	end
 
+	if RAAS_debug_graphical_bg > 0 then
+		graphics.set_color(0, 0, 0, RAAS_debug_graphical_bg)
+		graphics.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HIGHT)
+	end
+
 	graphics.set_width(2)
 
 	local pos_v = raas.fpp.sph2fpp({dr.lat[0], dr.lon[0]}, cur_arpt["fpp"])
 	local vel_v = raas.acf_vel_vector(raas.const.RWY_PROXIMITY_TIME_FACT)
 	local dbg = raas.dbg
 
-	dbg.draw_scale = math.min(650 / raas.vect2.abs(pos_v), 1)
+	dbg.draw_scale = math.min(SCREEN_HIGHT / (2 * raas.vect2.abs(pos_v)), 1)
 
 	graphics.set_color(1, 0, 0, 1)
 	graphics.draw_line(dbg.x(-5), dbg.y(0), dbg.x(5), dbg.y(0))
@@ -3104,7 +3112,8 @@ function raas.snd_sched()
 
 	-- Make sure our messages are only audible when we're inside
 	-- the cockpit and AC power is on
-	if view_is_ext and dr.ext_view[0] == 0 then
+	if view_is_ext and (dr.ext_view[0] == 0 or
+	    not RAAS_disable_ext_view) then
 		raas.set_sound_on(true)
 		view_is_ext = false
 	elseif not view_is_ext and dr.ext_view[0] == 1 then
