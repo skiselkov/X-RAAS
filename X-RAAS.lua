@@ -170,7 +170,6 @@ RAAS advisories:
 	    Conditions:
 		*) Max ground speed attained above 40 knots
 		*) Decelerated 5 knots below max ground speed
-		*) Aircraft on last half of runway
 		*) Ground speed above 40 knots
 
 	16) Too fast on approach
@@ -289,6 +288,8 @@ RAAS_debug_graphical = false
 RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
 RAAS_min_landing_dist = 800			-- meters
+RAAS_min_rotation_dist = 400			-- meters
+RAAS_min_rotation_angle = 4			-- degrees
 RAAS_accel_stop_dist_cutoff = 3000		-- meters
 RAAS_voice_female = true
 RAAS_voice_volume = 1.0
@@ -1075,6 +1076,7 @@ function raas.reset()
 	dr.lon = dataref_table("sim/flightmodel/position/longitude")
 	dr.elev = dataref_table("sim/flightmodel/position/elevation")
 	dr.hdg = dataref_table("sim/flightmodel/position/true_psi")
+	dr.pitch = dataref_table("sim/flightmodel/position/true_theta")
 	dr.nw_offset = dataref_table("sim/flightmodel/parts/" ..
 	    "tire_z_no_deflection")
 	dr.flaprqst = dataref_table("sim/flightmodel/controls/flaprqst")
@@ -2281,14 +2283,33 @@ function raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
 	end
 end
 
-function raas.stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
-	assert(arpt_id ~= nil)
-	assert(rwy_id ~= nil)
-	assert(hdg ~= nil)
-	assert(rwy_hdg ~= nil)
-	assert(pos_v ~= nil)
-	assert(opp_thr_v ~= nil)
+function raas.acf_rwy_rel_pitch(te, ote, len)
+	assert(te ~= nil)
+	assert(ote ~= nil)
 	assert(len ~= nil)
+
+	local rwy_angle = math.deg(math.asin((ote - te) / len))
+	return dr.pitch[0] - rwy_angle
+end
+
+function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
+	assert(arpt_id ~= nil)
+	assert(rwy ~= nil)
+	assert(suffix ~= nil)
+	assert(hdg ~= nil)
+	assert(pos_v ~= nil)
+
+	local osuffix
+	if suffix == "1" then
+		osuffix = "2"
+	else
+		osuffix = "1"
+	end
+	local rwy_id = rwy["id" .. suffix]
+	local opp_thr_v = rwy["dt" .. osuffix .. "v"]
+	local rwy_hdg = rwy["hdg" .. suffix]
+	local len = rwy["llen" .. suffix]
+	local te, ote = rwy["te" .. suffix], rwy["te" .. osuffix]
 
 	local gs = dr.gs[0]
 	local maxspd
@@ -2348,10 +2369,12 @@ function raas.stop_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v, len)
 		accel_stop_max_spd[arpt_id .. rwy_id] = gs
 		maxspd = gs
 	end
+	local rpitch = raas.acf_rwy_rel_pitch(te, ote, rwy["len"])
 	if gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH or landing or
-	    dist < RAAS_min_landing_dist then
-		local msg = {}
-		raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v, msg)
+	    (dist < RAAS_min_rotation_dist and
+	    dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH and
+	    rpitch < RAAS_min_rotation_angle) then
+		raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
 	end
 end
 
@@ -2377,10 +2400,8 @@ function raas.ground_on_runway_aligned_arpt(arpt)
 			    pos_v, rwy["dt1v"])
 		end
 		if raas.vect2.in_poly(pos_v, rwy["asda_bbox"]) then
-			raas.stop_check(arpt_id, rwy["id1"], hdg, rwy["hdg1"],
-			    pos_v, rwy["dt2v"], rwy["llen1"])
-			raas.stop_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
-			    pos_v, rwy["dt1v"], rwy["llen2"])
+			raas.stop_check(arpt_id, rwy, "1", hdg, pos_v)
+			raas.stop_check(arpt_id, rwy, "2", hdg, pos_v)
 		else
 			raas.stop_check_reset(arpt_id, rwy["id1"])
 			raas.stop_check_reset(arpt_id, rwy["id2"])
