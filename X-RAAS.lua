@@ -329,6 +329,8 @@ local RAAS_gpa_limit_mult = 1.5			-- multiplier
 local RAAS_gpa_limit_max = 8			-- degrees
 
 RAAS_alt_setting_enabled = true
+RAAS_qnh_alt_enabled = true
+RAAS_qfe_alt_enabled = false
 
 -- DO NOT CHANGE THIS!
 raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRSEP .. ".." .. DIRSEP ..
@@ -2807,20 +2809,21 @@ function raas.altimeter_setting()
 		    -- 1500 feet of it
 		    (TATL_field_elev ~= nil and (elev < TATL_field_elev +
 		    const.ALTM_SETTING_ALT_CHK_LIMIT))) then
-			local d_qnh = math.abs(elev - dr.baro_alt[0])
-			local d_qfe
-			if TATL_field_elev ~= nil then
+			local d_qnh, d_qfe = 0, 0
+
+			if RAAS_qnh_alt_enabled then
+				d_qnh = math.abs(elev - dr.baro_alt[0])
+			end
+			if TATL_field_elev ~= nil and RAAS_qfe_alt_enabled then
 				d_qfe = math.abs(dr.baro_alt[0] -
 				    (elev - TATL_field_elev))
 			end
 			raas.dbg.log("altimeter", 1, "alt check; d_qnh: "
 			    .. d_qnh .. " d_qfe: " .. tostring(d_qfe))
 			if  -- The set baro is out of bounds for QNH, OR
-			    d_qnh > const.ALTIMETER_SETTING_QNH_ERR_LIMIT and
-			    -- Field elevation is known and the set baro is
-			    -- out of bounds for QFE
-			    (d_qfe == nil or
-			    d_qfe > const.ALTM_SETTING_QFE_ERR_LIMIT) then
+			    d_qnh > const.ALTIMETER_SETTING_QNH_ERR_LIMIT or
+			    -- Set baro is out of bounds for QFE
+			    d_qfe > const.ALTM_SETTING_QFE_ERR_LIMIT then
 				raas.play_msg({"alt_set"}, const.MSG_PRIO_LOW)
 			end
 			TATL_transition = -1
