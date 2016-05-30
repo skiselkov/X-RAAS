@@ -236,6 +236,7 @@ raas.const.LANDING_ROLLOUT_TIME_FACT = 1	-- seconds
 raas.const.RADALT_GRD_THRESH = 5		-- feet
 raas.const.RADALT_FLARE_THRESH = 50		-- feet
 raas.const.STARTUP_DELAY = 3			-- seconds
+raas.const.INIT_MSG_TIMEOUT = 25		-- seconds
 raas.const.ARPT_RELOAD_INTVAL = 10		-- seconds
 raas.const.ARPT_LOAD_LIMIT = 8 * 1852		-- meters, 8nm distance
 raas.const.ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
@@ -281,6 +282,7 @@ raas.const.MSG_PRIO_HIGH = 3
 RAAS_enabled = true
 RAAS_min_engines = 2				-- count
 RAAS_min_MTOW = 5700				-- kg
+RAAS_auto_disable_notify = true
 
 RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
@@ -1447,21 +1449,23 @@ function raas.create_directories(dirnames)
 		end
 		cmd = "mkdir -p -- " .. args
 		raas.dbg.log("file", 1, "executing: " .. cmd)
-		os.execute(cmd)
+		assert(os.execute(cmd) == 0)
 	else
 		-- Because CMD.EXE on Windows is dumb as a sack of hammers,
 		-- we need to feed it commands in 8191-character increments,
 		-- because NOBODY would ever need more than 8191 characters on
 		-- a line, right?
 		for i, dirname in pairs(dirnames) do
-			-- the 11 character reserve here is for 'mkdir'
-			if #args + #dirname + 3 > 8170 then
+			-- the 290 character reserve here is because CMD.EXE
+			-- counts the hostname and current directory into
+			-- its line length (?!)
+			if #args + #dirname + 3 > 7900 then
 				-- Unfuck any slashes into backslashes to deal
 				-- with FlyWithLua's broken SCRIPT_DIRECTORY
 				args = args:gsub("/", "\\")
 				cmd = "mkdir " .. args
 				raas.dbg.log("file", 1, "executing: " .. cmd)
-				os.execute(cmd)
+				assert(os.execute(cmd) == 0)
 				args = ""
 			end
 			args = args .. " \"" .. dirname .. "\""
@@ -1470,7 +1474,7 @@ function raas.create_directories(dirnames)
 			args = args:gsub("/", "\\")
 			cmd = "mkdir " .. args
 			raas.dbg.log("file", 1, "executing: " .. cmd)
-			os.execute(cmd)
+			assert(os.execute(cmd) == 0)
 		end
 	end
 end
@@ -3158,9 +3162,16 @@ end
 function load_config(cfgname)
 	local cfg_f = io.open(cfgname)
 	if cfg_f ~= nil then
-		local cfg = cfg_f:read("*all")
-		assert(loadstring(cfg))()
 		cfg_f:close()
+		--local cfg = cfg_f:read("*all")
+		local f, err = loadfile(cfgname)
+		if f ~= nil then
+			f()
+		else
+			raas.init_msg = "X-RAAS: syntax error in config " ..
+			    "file: " .. tostring(err)
+			logMsg(raas.init_msg)
+		end
 	end
 end
 
@@ -3169,19 +3180,58 @@ function raas.load_configs()
 	load_config(AIRCRAFT_PATH .. "X-RAAS.cfg")
 end
 
+function raas.show_init_msg()
+	local graphics = require 'graphics'
+	if not raas.init_msg then
+		return
+	end
+	if os.clock() - raas_start_time > raas.const.INIT_MSG_TIMEOUT then
+		raas.init_msg = nil
+		return
+	end
+	local lines = raas.init_msg:split("\n")
+	local width = 0
+	local height = #lines * 20
+	for i, line in pairs(lines) do
+		width = math.max(width, graphics.measure_string(line,
+		    "Helvetica_18"))
+	end
+	graphics.set_color(0, 0, 0, 0.67)
+	graphics.draw_rectangle((SCREEN_WIDTH - width) / 2 - 20, 0,
+	    (SCREEN_WIDTH + width) / 2 + 20, height + 20)
+	graphics.set_color(1, 1, 1, 1)
+	for i, line in pairs(lines) do
+		graphics.draw_string_Helvetica_18((SCREEN_WIDTH - width) / 2,
+		    height - i * 20 + 10, line)
+	end
+end
+
 raas.load_configs()
 raas.reset()
+
+if raas.init_msg then
+	do_every_draw('raas.show_init_msg()')
+	return
+end
 
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
 elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
-	logMsg("X-RAAS: DISABLED DUE TO PLANE PARAMS\n" ..
-	    "  THIS AIRCRAFT: ICAO: " .. dr.ICAO[0] .. "; engines: " ..
+	local msg = "X-RAAS: auto-disabled due to aircraft parameters:\n" ..
+	    "  Your aircraft: (" .. dr.ICAO[0] .. ") #engines: " ..
 	    dr.num_engines[0] .. "; MTOW: " .. math.floor(dr.mtow[0]) ..
 	    " kg\n" ..
-	    "  X-RAAS CONFIG: RAAS_min_engines: " .. RAAS_min_engines ..
-	    "; RAAS_min_MTOW: " ..RAAS_min_MTOW .. " kg")
+	    "  X-RAAS configuration: minimum #engines: " .. RAAS_min_engines
+	    .. "; minimum MTOW: " ..RAAS_min_MTOW .. " kg\n" ..
+	    "  If you don't know what this means, refer to the user manual " ..
+	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 2 " ..
+	    "\"Activating X-RAAS in the aircraft\"."
+	logMsg(msg)
+	if RAAS_auto_disable_notify then
+		raas.init_msg = msg
+		do_every_draw('raas.show_init_msg()')
+	end
 	return
 else
 	logMsg("X-RAAS: ENABLED")
