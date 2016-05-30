@@ -1912,6 +1912,7 @@ function raas.unload_airports_in_tile(lat, lon)
 	for icao, coords in pairs(tile) do
 		apt_dat[icao] = nil
 	end
+	airport_geo_table[lat][lon] = nil
 end
 
 function raas.load_nearest_airport_tiles()
