@@ -283,6 +283,7 @@ RAAS_enabled = true
 RAAS_min_engines = 2				-- count
 RAAS_min_MTOW = 5700				-- kg
 RAAS_auto_disable_notify = true
+RAAS_override_electrical = false
 
 RAAS_use_imperial = true
 RAAS_min_takeoff_dist = 1000			-- meters
@@ -603,18 +604,24 @@ end
 
 -- Splits string `str' at separators `sep' and returns an array of components
 -- (without the separators).
-function string.split(str, sep)
+function string.split(str, sep, skip_empty)
 	local res = {}
 	local s = 1
+
 	while true do
 		local e = str:find(sep, s, true)
 		if e == nil then
 			break
 		end
-		res[#res + 1] = str:sub(s, e - #sep)
+		if not skip_empty or e - s > 0 then
+			res[#res + 1] = str:sub(s, e - #sep)
+		end
 		s = e + #sep
 	end
-	res[#res + 1] = str:sub(s)
+	if not skip_empty or #str > s then
+		res[#res + 1] = str:sub(s)
+	end
+
 	return res
 end
 
@@ -1097,8 +1104,6 @@ function raas.reset()
 	dr.num_engines = dataref_table("sim/aircraft/engine/acf_num_engines")
 	dr.mtow = dataref_table("sim/aircraft/weight/acf_m_max")
 	dr.ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
-	dr.eng_gen = dataref_table("sim/cockpit/electrical/generator_on")
-	dr.apu_gen = dataref_table("sim/cockpit/electrical/generator_apu_on")
 	dr.gpws_warn = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
 	dr.gpws_ann = dataref_table("sim/cockpit2/annunciators/GPWS")
 
@@ -1245,7 +1250,7 @@ function raas.map_apt_dat(apt_dat_fname)
 			break
 		end
 		if line:find("1 ", 1, true) == 1 then
-			local comps = string.split(line, " ")
+			local comps = string.split(line, " ", true)
 			local new_icao = comps[5]
 			local thisTA, thisTL = 0, 0
 			local lat, lon
@@ -1272,6 +1277,9 @@ function raas.map_apt_dat(apt_dat_fname)
 			apt = nil
 
 			if apt_dat[new_icao] == nil then
+				if new_icao == "KSBA" then
+					logMsg("found KSBA in " .. apt_dat_fname)
+				end
 				arpt_cnt = arpt_cnt + 1
 				apt = {
 				    ["elev"] = tonumber(comps[2]),
@@ -1293,7 +1301,7 @@ function raas.map_apt_dat(apt_dat_fname)
 				end
 			end
 		elseif line:find("100 ", 1, true) == 1 and icao ~= nil then
-			local comps = string.split(line, " ")
+			local comps = string.split(line, " ", true)
 			local width = comps[2]
 			local id1 = comps[8 + 1]
 			local lat1 = comps[8 + 2]
@@ -1357,7 +1365,7 @@ function raas.find_all_apt_dats()
 	if scenery_packs_ini ~= nil then
 		for line in scenery_packs_ini:lines() do
 			if line:find("SCENERY_PACK ", 1, true) == 1 then
-				local scn_name = line:sub(13)
+				local scn_name = line:sub(14)
 				apt_dats[#apt_dats + 1] = raas.const.xpdir ..
 				    scn_name .. DIRSEP .. "Earth nav data" ..
 				    DIRSEP .. "apt.dat"
@@ -2866,20 +2874,13 @@ end
 
 -- Returns true if X-RAAS has electrical power from the aircraft.
 function raas_is_on()
-	local gen_on = false
+	if RAAS_override_electrical then
+		return true
+	end
+
 	local turned_on
 
-	for i = 0, dr.num_engines[0] - 1 do
-		if dr.eng_gen[i] ~= 0 then
-			gen_on = true
-			break
-		end
-	end
-	if dr.apu_gen[0] ~= 0 then
-		gen_on = true
-	end
-
-	turned_on = (gen_on and (dr.bus_volt[0] > raas.const.MIN_BUS_VOLT or
+	turned_on = ((dr.bus_volt[0] > raas.const.MIN_BUS_VOLT or
 	    dr.bus_volt[1] > raas.const.MIN_BUS_VOLT) and
 	    dr.avionics_on[0] == 1 and dr.gpws_warn[0] ~= 1)
 
