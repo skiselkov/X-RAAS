@@ -1275,13 +1275,6 @@ function raas.map_apt_dat(apt_dat_fname)
 				lon = tonumber(comps[9]:sub(5))
 			end
 
-			if icao ~= nil and table.isempty(apt["rwys"]) then
-				-- if the previous airport contained
-				-- no runways, discard it
-				apt_dat[icao] = nil
-				arpt_cnt = arpt_cnt - 1
-			end
-
 			icao = nil
 			apt = nil
 
@@ -1606,6 +1599,11 @@ function raas.recreate_apt_dat_cache()
 	-- First scan all the provided apt.dat files
 	for i = 1, #apt_dat_files do
 		raas.map_apt_dat(apt_dat_files[i])
+	end
+	for icao, arpt in pairs(apt_dat) do
+		if table.isempty(arpt["rwys"]) then
+			apt_dat[icao] = nil
+		end
 	end
 	raas.load_airports_txt()
 
