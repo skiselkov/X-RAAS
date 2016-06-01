@@ -1279,9 +1279,6 @@ function raas.map_apt_dat(apt_dat_fname)
 			apt = nil
 
 			if apt_dat[new_icao] == nil then
-				if new_icao == "KSBA" then
-					logMsg("found KSBA in " .. apt_dat_fname)
-				end
 				arpt_cnt = arpt_cnt + 1
 				apt = {
 				    ["elev"] = tonumber(comps[2]),
