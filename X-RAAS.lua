@@ -1226,6 +1226,15 @@ function raas.make_rwy_bbox(thresh_v, dir_v, width, len, long_displ)
 	return {a, b, c, d}
 end
 
+-- Checks if the numerical runway type `t' is a hard-surface runway. From
+-- the X-Plane v850 apt.dat spec:
+--	t=1: asphalt
+--	t=2: concrete
+--	t=15: unspecified hard surface (transparent)
+function raas.rwy_is_hard(t)
+	return (t == 1 or t == 2 or t == 15)
+end
+
 -- Parses an apt.dat (or X-RAAS_apt_dat.cache) file, parses its contents
 -- and reconstructs our apt_dat table. This is called at the start of
 -- X-RAAS to populate the airport and runway database. The 
@@ -1318,32 +1327,36 @@ function raas.map_apt_dat(apt_dat_fname)
 			    0, 0, 0, 0, 0, 0
 			local rwy
 
-			if #comps >= 28 and
-			    comps[23]:find("GPA1:", 1, true) == 1 and
-			    comps[24]:find("GPA2:", 1, true) == 1 and
-			    comps[25]:find("TCH1:", 1, true) == 1 and
-			    comps[26]:find("TCH2:", 1, true) == 1 and
-			    comps[27]:find("TELEV1:", 1, true) == 1 and
-			    comps[28]:find("TELEV2:", 1, true) == 1 then
-				gpa1 = tonumber(comps[23]:sub(6))
-				gpa2 = tonumber(comps[24]:sub(6))
-				tch1 = tonumber(comps[25]:sub(6))
-				tch2 = tonumber(comps[26]:sub(6))
-				telev1 = tonumber(comps[27]:sub(8))
-				telev2 = tonumber(comps[28]:sub(8))
+			if raas.rwy_is_hard(tonumber(comps[3])) then
+				if #comps >= 28 and
+				    comps[23]:find("GPA1:", 1, true) == 1 and
+				    comps[24]:find("GPA2:", 1, true) == 1 and
+				    comps[25]:find("TCH1:", 1, true) == 1 and
+				    comps[26]:find("TCH2:", 1, true) == 1 and
+				    comps[27]:find("TELEV1:", 1, true) == 1 and
+				    comps[28]:find("TELEV2:", 1, true) == 1 then
+					gpa1 = tonumber(comps[23]:sub(6))
+					gpa2 = tonumber(comps[24]:sub(6))
+					tch1 = tonumber(comps[25]:sub(6))
+					tch2 = tonumber(comps[26]:sub(6))
+					telev1 = tonumber(comps[27]:sub(8))
+					telev2 = tonumber(comps[28]:sub(8))
+				end
+
+				rwy = {
+				    ["w"] = width,
+				    ["id1"] = id1, ["lat1"] = lat1,
+				    ["lon1"] = lon1, ["dis1"] = displ1,
+				    ["bla1"] = blast1, ["gpa1"] = gpa1,
+				    ["tch1"] = tch1, ["te1"] = telev1,
+				    ["id2"] = id2, ["lat2"] = lat2,
+				    ["lon2"] = lon2, ["dis2"] = displ2,
+				    ["bla2"] = blast2, ["gpa2"] = gpa2,
+				    ["tch2"] = tch2, ["te2"] = telev2
+				}
+
+				rwys[#rwys + 1] = rwy
 			end
-
-			rwy = {
-			    ["w"] = width,
-			    ["id1"] = id1, ["lat1"] = lat1, ["lon1"] = lon1,
-			    ["dis1"] = displ1, ["bla1"] = blast1,
-			    ["gpa1"] = gpa1, ["tch1"] = tch1, ["te1"] = telev1,
-			    ["id2"] = id2, ["lat2"] = lat2, ["lon2"] = lon2,
-			    ["dis2"] = displ2, ["bla2"] = blast2,
-			    ["gpa2"] = gpa2, ["tch2"] = tch2, ["te2"] = telev2
-			}
-
-			rwys[#rwys + 1] = rwy
 		end
 	end
 
@@ -1549,7 +1562,7 @@ function raas.write_apt_dat(icao, arpt)
 		    tch2 ~= nil and te2 ~= nil)
 
 		fp:write("100 " .. rwy["w"] ..
-		    " 0 0 0 0 0 0 " ..
+		    " 1 0 0 0 0 0 " ..
 		    id1 .. " " ..
 		    lat1 .. " " ..
 		    lon1 .. " " ..
