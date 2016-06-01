@@ -453,7 +453,7 @@ end
 
 -- Returns a pair of integer indices that can be used into the
 -- airport_geo_table to retrieve the tile for a given latitude & longitude.
-function geo_table_idx(lat, lon)
+function raas.geo_table_idx(lat, lon)
 	if lat < -80 or lat > 80 then
 		return nil, nil
 	end
@@ -477,7 +477,7 @@ function raas.geo_table_get_tile(lat, lon, create)
 	local created = false
 	local lat_tbl, lon_tbl
 
-	lat, lon = geo_table_idx(lat, lon)
+	lat, lon = raas.geo_table_idx(lat, lon)
 	if lat == nil or lon == nil then
 		return nil, false
 	end
@@ -1521,7 +1521,7 @@ function raas.write_apt_dat(icao, arpt)
 	assert(elev ~= nil and TA ~= nil and TL ~= nil and lat ~= nil and
 	    lon ~= nil)
 
-	local lat_idx, lon_idx = geo_table_idx(lat, lon)
+	local lat_idx, lon_idx = raas.geo_table_idx(lat, lon)
 	if lat_idx == nil or lon_idx == nil then
 		return
 	end
@@ -1909,7 +1909,7 @@ end
 
 function raas.load_airports_in_tile(lat, lon)
 	local tile, created = raas.geo_table_get_tile(lat, lon, true)
-	lat, lon = geo_table_idx(lat, lon)
+	lat, lon = raas.geo_table_idx(lat, lon)
 
 	if created then
 		raas.map_apt_dat(string.format("%s%s%03d_%03d",
@@ -1947,7 +1947,7 @@ function raas.lon_delta(x, y)
 end
 
 function raas.unload_distant_airport_tiles()
-	local lat, lon = geo_table_idx(dr.lat[0], dr.lon[0])
+	local lat, lon = raas.geo_table_idx(dr.lat[0], dr.lon[0])
 
 	for lat_i, lat_tbl in pairs(airport_geo_table) do
 		for lon_i, lon_tbl in pairs(lat_tbl) do
@@ -2699,7 +2699,7 @@ function raas.air_runway_approach()
 	end
 end
 
-function raas.find_closest_curarpt()
+function raas.find_nearest_curarpt()
 	local min_dist = raas.const.ARPT_LOAD_LIMIT
 	local pos_ecef = raas.conv.sph2ecef({dr.lat[0], dr.lon[0]})
 	local cur_arpt
@@ -2717,17 +2717,18 @@ function raas.find_closest_curarpt()
 end
 
 function raas.altimeter_setting()
-	if not RAAS_alt_setting_enabled then
+	if not RAAS_alt_setting_enabled or
+	    dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
 		return
 	end
 
-	local cur_arpt = raas.find_closest_curarpt()
+	local cur_arpt = raas.find_nearest_curarpt()
 	local field_changed = false
 	local const = raas.const
 
 	if cur_arpt ~= nil then
 		local arpt_id = cur_arpt["arpt_id"]
-		raas.dbg.log("altimeter", 3, "find_closest_curarpt() = " ..
+		raas.dbg.log("altimeter", 2, "find_nearest_curarpt() = " ..
 		    arpt_id)
 		TA = cur_arpt["TA"]
 		TL = cur_arpt["TL"]
@@ -2744,21 +2745,37 @@ function raas.altimeter_setting()
 		    dr.lon[0], nil, xplm_Nav_Airport)
 		local pos_ecef, arpt_ecef, db_arpt
 		local vect3 = raas.vect3
+		local outType, outLat, outLon, outHeight, outFreq, outHdg,
+		    outID, outName
 
-		raas.dbg.log("altimeter", 3, "XPLMFindNavAid() = " ..
+		raas.dbg.log("altimeter", 2, "XPLMFindNavAid() = " ..
 		    tostring(arpt_ref))
 		if arpt_ref ~= nil then
-			outType, lat, lon, outHeight, outFreq, outHdg,
+			outType, outLat, outLon, outHeight, outFreq, outHdg,
 			    outID, outName = XPLMGetNavAidInfo(arpt_ref)
 			pos_ecef = raas.conv.sph2ecef({dr.lat[0], dr.lon[0]})
-			arpt_ecef = raas.conv.sph2ecef({lat, lon})
+			arpt_ecef = raas.conv.sph2ecef({outLat, outLon})
 		end
 
 		if outID ~= nil and TATL_source ~= outID and
 		    vect3.abs(vect3.sub(pos_ecef, arpt_ecef)) <
 		    const.TATL_REMOTE_ARPT_DIST_LIMIT then
-			raas.load_airports_in_tile(lat, lon)
+			raas.load_airports_in_tile(outLat, outLon)
 			db_arpt = apt_dat[outID]
+			if db_arpt == nil then
+				-- Grab the first airport in that tile
+				local lat_i, lon_i = raas.geo_table_idx(outLat,
+				    outLon)
+				local tile = raas.geo_table_get_tile(lat_i,
+				    lon_i, false)
+				if tile ~= nil and not table.isempty(tile) then
+					local icao = next(tile)
+					db_arpt = apt_dat[icao]
+					raas.dbg.log("altimeter", 2,
+					    "fallback airport = " ..
+					    tostring(icao))
+				end
+			end
 		end
 
 		if db_arpt ~= nil then
@@ -2998,7 +3015,7 @@ function raas.dbg.draw()
 	end
 
 	local graphics = require 'graphics'
-	local cur_arpt = raas.find_closest_curarpt()
+	local cur_arpt = raas.find_nearest_curarpt()
 
 	if not cur_arpt then
 		return
