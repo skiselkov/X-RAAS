@@ -272,7 +272,7 @@ raas.const.RWY_APCH_SUPP_WINDOWS = {		-- suppress 'approaching'
 raas.const.TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 raas.const.MIN_BUS_VOLT = 11			-- Volts
 raas.const.BUS_LOAD_AMPS = 2			-- Amps
-local XRAAS_apt_dat_cache_version = 2
+raas.const.XRAAS_apt_dat_cache_version = 3
 
 raas.const.MSG_PRIO_LOW = 1
 raas.const.MSG_PRIO_MED = 2
@@ -1581,7 +1581,7 @@ function raas.recreate_apt_dat_cache()
 	if version_file ~= nil then
 		local version = tonumber(version_file:read("*all"))
 		version_file:close()
-		if version == XRAAS_apt_dat_cache_version then
+		if version == raas.const.XRAAS_apt_dat_cache_version then
 			-- cache version current, no need to rebuild it
 			return
 		end
@@ -1599,7 +1599,7 @@ function raas.recreate_apt_dat_cache()
 	raas.remove_directory(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache")
 	raas.create_directories({SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache"})
 	version_file = io.open(version_filename, "w")
-	version_file:write(tostring(XRAAS_apt_dat_cache_version))
+	version_file:write(tostring(raas.const.XRAAS_apt_dat_cache_version))
 	version_file:close()
 
 	local dirs = {}
@@ -2792,7 +2792,7 @@ function raas.altimeter_setting()
 
 	if TL == 0 then
 		if field_changed then
-			raas.dbg.log("altimeter", 3, "TL = 0")
+			raas.dbg.log("altimeter", 1, "TL = 0")
 		end
 		if TA ~= 0 then
 			if dr.baro_sl[0] > const.STD_BARO_REF then
