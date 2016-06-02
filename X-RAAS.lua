@@ -235,6 +235,7 @@ raas.const.RWY_PROXIMITY_TIME_FACT = 2		-- seconds
 raas.const.LANDING_ROLLOUT_TIME_FACT = 1	-- seconds
 raas.const.RADALT_GRD_THRESH = 5		-- feet
 raas.const.RADALT_FLARE_THRESH = 50		-- feet
+raas.const.RADALT_DEPART_THRESH = 100		-- feet
 raas.const.STARTUP_DELAY = 3			-- seconds
 raas.const.INIT_MSG_TIMEOUT = 25		-- seconds
 raas.const.ARPT_RELOAD_INTVAL = 10		-- seconds
@@ -2362,12 +2363,19 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 
 	if dr.rad_alt[0] > raas.const.RADALT_GRD_THRESH then
 		raas.stop_check_reset(arpt_id, rwy_id)
+		local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] -
+		    last_elev))
 		if departed and
 		    dr.rad_alt[0] <= raas.const.RADALT_FLARE_THRESH and
-		    raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev)) <
-		    raas.const.GOAROUND_CLB_RATE_THRESH then
-			if (dist < len / 2 or (dist <= RAAS_min_landing_dist and
-			    len >= RAAS_min_landing_dist)) then
+		    clb_rate < raas.const.GOAROUND_CLB_RATE_THRESH then
+			-- Our distance limit is the greater of either:
+			-- 1) half the runway length
+			-- 2) the lesser of:
+			--	a) minimum safe landing distance
+			--	b) full runway length
+			local dist_lim = math.max(len / 2, math.min(len,
+			    RAAS_min_landing_dist))
+			if dist < dist_lim then
 				if not long_landing_ann then
 					local msg = {"long_land", "long_land"}
 					long_landing_ann = true
@@ -2440,9 +2448,11 @@ end
 function raas.ground_on_runway_aligned()
 	local on_rwy = false
 
-	for arpt_id, arpt in pairs(cur_arpts) do
-		if raas.ground_on_runway_aligned_arpt(arpt) then
-			on_rwy = true
+	if dr.rad_alt[0] < raas.const.RADALT_DEPART_THRESH then
+		for arpt_id, arpt in pairs(cur_arpts) do
+			if raas.ground_on_runway_aligned_arpt(arpt) then
+				on_rwy = true
+			end
 		end
 	end
 
