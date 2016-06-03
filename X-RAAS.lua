@@ -334,6 +334,8 @@ RAAS_alt_setting_enabled = true
 RAAS_qnh_alt_enabled = true
 RAAS_qfe_alt_enabled = false
 
+RAAS_US_runway_numbers = false
+
 -- Debug settings. These aren't documented, as they're rather advanced.
 RAAS_debug = {}
 RAAS_debug_graphical = false
@@ -383,11 +385,11 @@ local TATL_source = nil
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
 	["5"] = {}, ["6"] = {}, ["7"] = {}, ["8"] = {}, ["9"] = {}, ["30"] = {},
-	["alt_set"] = {}, ["apch"] = {}, ["caution"] = {}, ["flaps"] = {},
-	["hundred"] = {}, ["left"] = {}, ["long_land"] = {}, ["on_rwy"] = {},
-	["on_twy"] = {}, ["right"] = {}, ["rmng"] = {}, ["short_rwy"] = {},
-	["thousand"] = {}, ["too_fast"] = {}, ["too_high"] = {}, ["twy"] = {},
-	["unstable"] = {}
+	["alt_set"] = {}, ["apch"] = {}, ["caution"] = {}, ["center"] = {},
+	["flaps"] = {}, ["hundred"] = {}, ["left"] = {}, ["long_land"] = {},
+	["on_rwy"] = {}, ["on_twy"] = {}, ["right"] = {}, ["rmng"] = {},
+	["short_rwy"] = {}, ["thousand"] = {}, ["too_fast"] = {},
+	["too_high"] = {}, ["twy"] = {}, ["unstable"] = {}
 }
 local cur_msg = {}
 local view_is_ext = false
@@ -2051,7 +2053,10 @@ function raas.rwy_id_to_msg(rwy_id, msg)
 	assert(rwy_id ~= nil)
 	assert(msg ~= nil)
 
-	msg[#msg + 1] = rwy_id:sub(1, 1)
+	local first_digit = rwy_id:sub(1, 1)
+	if first_digit ~= "0" or not RAAS_US_runway_numbers then
+		msg[#msg + 1] = first_digit
+	end
 	msg[#msg + 1] = rwy_id:sub(2, 2)
 	msg[#msg + 1] = raas.rwy_lcr_msg(rwy_id)
 end
