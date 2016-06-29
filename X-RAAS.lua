@@ -112,7 +112,7 @@ RAAS advisories:
 		*) Groundspeed > 40 knots
 		*) Calls supressed during go-around
 		    +) Above 100 feet AGL
-		    +) Climb rate 450 FPM or greater
+		    +) Climb rate 300 FPM or greater
 		*) Does not ensure aircraft will or can be stopped before
 		   runway edge / end
 
@@ -246,11 +246,11 @@ raas.const.BOGUS_THR_ELEV_LIMIT = 500		-- feet
 raas.const.STD_BARO_REF = 29.92			-- inches of mercury
 raas.const.ALTM_SETTING_TIMEOUT = 30		-- seconds
 raas.const.ALTM_SETTING_ALT_CHK_LIMIT = 1500	-- feet
-raas.const.ALTIMETER_SETTING_QNH_ERR_LIMIT = 60	-- feet
-raas.const.ALTM_SETTING_QFE_ERR_LIMIT = 60	-- feet
+raas.const.ALTIMETER_SETTING_QNH_ERR_LIMIT = 120-- feet
+raas.const.ALTM_SETTING_QFE_ERR_LIMIT = 120	-- feet
 raas.const.ALTM_SETTING_BARO_ERR_LIMIT = 0.02	-- inches of mercury
 raas.const.IMMEDIATE_STOP_DIST = 50		-- meters
-raas.const.GOAROUND_CLB_RATE_THRESH = 450	-- feet per minute
+raas.const.GOAROUND_CLB_RATE_THRESH = 300	-- feet per minute
 raas.const.OFF_RWY_HEIGHT_MAX = 250		-- feet
 raas.const.OFF_RWY_HEIGHT_MIN = 100		-- feet
 
@@ -1160,6 +1160,10 @@ function raas.gpws_flaps_ovrd()
 	if AIRCRAFT_FILENAME:find("757RR", 1, true) == 1 or
 	    AIRCRAFT_FILENAME:find("757PW", 1, true) == 1 then
 		local dr = dataref_table("anim/72/button")
+		return dr[0] == 1
+	elseif AIRCRAFT_FILENAME:find("B733", 1, true) == 1 and
+	    PLANE_TAILNUMBER:find("737300", 1, true) == 1 then
+		local dr = dataref_table("ixeg/733/misc/egpws_flap_act")
 		return dr[0] == 1
 	end
 	return raas.gpws_terr_ovrd()
@@ -2510,8 +2514,12 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 	assert(ann_table ~= nil)
 	assert(critical ~= nil)
 
+	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev))
+
 	if not ann_table[arpt_id .. rwy_id] and
-	    alt - elev < ceil and alt - elev > floor then
+	    alt - elev < ceil and alt - elev > floor and
+	    not raas.gear_is_up() and
+	    clb_rate < raas.const.GOAROUND_CLB_RATE_THRESH then
 		raas.dbg.log("apch_conf_chk", 2, "check at " .. ceil .. "/" ..
 		    floor)
 		raas.dbg.log("apch_conf_chk", 2, "gpa_act = " .. gpa_act ..
