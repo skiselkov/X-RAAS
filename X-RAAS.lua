@@ -241,7 +241,7 @@ raas.const.INIT_MSG_TIMEOUT = 25		-- seconds
 raas.const.ARPT_RELOAD_INTVAL = 10		-- seconds
 raas.const.ARPT_LOAD_LIMIT = 8 * 1852		-- meters, 8nm distance
 raas.const.ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
-raas.const.STOP_INIT_DELAY = 300
+raas.const.STOP_INIT_DELAY = 300		-- meters
 raas.const.BOGUS_THR_ELEV_LIMIT = 500		-- feet
 raas.const.STD_BARO_REF = 29.92			-- inches of mercury
 raas.const.ALTM_SETTING_TIMEOUT = 30		-- seconds
@@ -264,6 +264,7 @@ raas.const.RWY_APCH_FLAP1_THRESH = 950		-- feet
 raas.const.RWY_APCH_FLAP2_THRESH = 600		-- feet
 raas.const.RWY_APCH_FLAP3_THRESH = 450		-- feet
 raas.const.RWY_APCH_FLAP4_THRESH = 300		-- feet
+raas.const.ARPT_APCH_BLW_ELEV_THRESH = 500	-- feet
 raas.const.RWY_APCH_ALT_MAX = 700		-- feet
 raas.const.RWY_APCH_ALT_MIN = 320		-- feet
 raas.const.RWY_APCH_SUPP_WINDOWS = {		-- suppress 'approaching'
@@ -279,6 +280,10 @@ raas.const.MSG_PRIO_LOW = 1
 raas.const.MSG_PRIO_MED = 2
 raas.const.MSG_PRIO_HIGH = 3
 
+raas.const.incompat_acf = {
+    "LES_Saab_340A"
+}
+
 -- config stuff (to be overridden by acf)
 RAAS_enabled = true
 RAAS_min_engines = 2				-- count
@@ -291,7 +296,7 @@ RAAS_min_takeoff_dist = 1000			-- meters
 RAAS_min_landing_dist = 800			-- meters
 RAAS_min_rotation_dist = 400			-- meters
 RAAS_min_rotation_angle = 3			-- degrees
-RAAS_accel_stop_dist_cutoff = 3000		-- meters
+RAAS_stop_dist_cutoff = 2000		-- meters
 RAAS_voice_female = true
 RAAS_voice_volume = 1.0
 RAAS_disable_ext_view = true
@@ -2293,21 +2298,25 @@ function raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
 	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
 	local msg = {}
 
-	if accel_stop_ann_initial == 0 then
+	-- Do an initial "remaining" annunciation at the start of the
+	-- rejected takeoff. Do not do these on normal landing.
+	if accel_stop_ann_initial == 0 and not landing then
 		accel_stop_ann_initial = dist
 		if raas.dist_to_msg(dist, msg) then
 			msg[#msg + 1] = "rmng"
 			raas.play_msg(msg, raas.const.MSG_PRIO_MED)
 		end
-	elseif dist < accel_stop_ann_initial - raas.const.STOP_INIT_DELAY
-	    then
+	elseif dist < accel_stop_ann_initial - raas.const.STOP_INIT_DELAY and
+	    (not landing or dist < RAAS_stop_dist_cutoff) then
 		for i, info in pairs(RAAS_accel_stop_distances) do
 			local min = info["min"]
 			local max = info["max"]
 			local ann = info["ann"]
 
-			if dist < RAAS_accel_stop_dist_cutoff and
-			    dist > min and dist < max and not ann then
+			-- do distance annunciations if we're performing
+			-- a rejected takeoff (not departed) or the length
+			-- remaining is below the stop_dist_cutoff (landing)
+			if dist > min and dist < max and not ann then
 				local msg = {}
 				raas.dist_to_msg(dist, msg)
 				msg[#msg + 1] = "rmng"
@@ -2672,7 +2681,8 @@ function raas.air_runway_approach_arpt(arpt)
 	local hdg = dr.hdg[0]
 	local arpt_id = arpt["arpt_id"]
 	local elev = arpt["elev"]
-	if alt > elev + raas.const.RWY_APCH_FLAP1_THRESH or alt < elev then
+	if alt > elev + raas.const.RWY_APCH_FLAP1_THRESH or
+	    alt < elev - raas.const.ARPT_APCH_BLW_ELEV_THRESH then
 		raas.reset_airport_approach_table(air_apch_flap1_ann, arpt_id)
 		raas.reset_airport_approach_table(air_apch_flap2_ann, arpt_id)
 		raas.reset_airport_approach_table(air_apch_rwy_ann, arpt_id)
@@ -3255,6 +3265,15 @@ function raas.show_init_msg()
 	end
 end
 
+function raas.chk_acf_incompat()
+	for id, acfname in pairs(raas.const.incompat_acf) do
+		if AIRCRAFT_FILENAME:find(acfname, 1, true) ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
 raas.load_configs()
 raas.reset()
 
@@ -3276,6 +3295,15 @@ elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
 	    "  If you don't know what this means, refer to the user manual " ..
 	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 2 " ..
 	    "\"Activating X-RAAS in the aircraft\"."
+	logMsg(msg)
+	if RAAS_auto_disable_notify then
+		raas.init_msg = msg
+		do_every_draw('raas.show_init_msg()')
+	end
+	return
+elseif raas.chk_acf_incompat() then
+	local msg = "X-RAAS: auto-disabled, incompatible aircraft " ..
+	    "detected."
 	logMsg(msg)
 	if RAAS_auto_disable_notify then
 		raas.init_msg = msg
