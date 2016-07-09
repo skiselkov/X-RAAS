@@ -296,7 +296,7 @@ RAAS_min_takeoff_dist = 1000			-- meters
 RAAS_min_landing_dist = 800			-- meters
 RAAS_min_rotation_dist = 400			-- meters
 RAAS_min_rotation_angle = 3			-- degrees
-RAAS_stop_dist_cutoff = 2000		-- meters
+RAAS_stop_dist_cutoff = 1500			-- meters
 RAAS_voice_female = true
 RAAS_voice_volume = 1.0
 RAAS_disable_ext_view = true
@@ -400,6 +400,7 @@ local cur_msg = {}
 local view_is_ext = false
 local bus_loaded = -1
 local last_elev = 0
+local last_gs = 0	-- in m/s
 
 -- Checks if RAAS_debug has index `category' set to a value of greater than
 -- or equal to `level' and if yes, prints "RAAS_debug[<category>]: <msg>"
@@ -2179,7 +2180,7 @@ end
 function raas.ground_runway_approach()
 	local in_prox = false
 
-	if dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
+	if dr.rad_alt[0] < raas.const.RADALT_FLARE_THRESH then
 		local vel_v = raas.acf_vel_vector(
 		    raas.const.RWY_PROXIMITY_TIME_FACT)
 		for arpt_id, arpt in pairs(cur_arpts) do
@@ -2291,41 +2292,43 @@ function raas.takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	end
 end
 
-function raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
+function raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v, prepend)
 	assert(opp_thr_v ~= nil)
 	assert(pos_v ~= nil)
 
 	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
+	local theinfo = nil
+	local maxdelta = 1000000
 	local msg = {}
 
-	-- Do an initial "remaining" annunciation at the start of the
-	-- rejected takeoff. Do not do these on normal landing.
-	if accel_stop_ann_initial == 0 and not landing then
-		accel_stop_ann_initial = dist
-		if raas.dist_to_msg(dist, msg) then
-			msg[#msg + 1] = "rmng"
-			raas.play_msg(msg, raas.const.MSG_PRIO_MED)
-		end
-	elseif dist < accel_stop_ann_initial - raas.const.STOP_INIT_DELAY and
-	    (not landing or dist < RAAS_stop_dist_cutoff) then
-		for i, info in pairs(RAAS_accel_stop_distances) do
-			local min = info["min"]
-			local max = info["max"]
-			local ann = info["ann"]
+	for i, info in pairs(RAAS_accel_stop_distances) do
+		local min = info["min"]
+		local max = info["max"]
 
-			-- do distance annunciations if we're performing
-			-- a rejected takeoff (not departed) or the length
-			-- remaining is below the stop_dist_cutoff (landing)
-			if dist > min and dist < max and not ann then
-				local msg = {}
-				raas.dist_to_msg(dist, msg)
-				msg[#msg + 1] = "rmng"
-				info["ann"] = true
-				raas.play_msg(msg, raas.const.MSG_PRIO_MED)
-				break
-			end
+		if dist > min and dist < max then
+			theinfo = info
+			break
+		end
+		if prepend ~= nil and dist > min and dist - min < maxdelta then
+			theinfo = info
+			maxdelta = dist - min
 		end
 	end
+
+	assert(prepend == nil or theinfo ~= nil)
+
+	if theinfo == nil or theinfo["ann"] == true then
+		return
+	end
+
+	if prepend ~= nil then
+		msg = prepend
+	end
+
+	raas.dist_to_msg(dist, msg)
+	msg[#msg + 1] = "rmng"
+	theinfo["ann"] = true
+	raas.play_msg(msg, raas.const.MSG_PRIO_MED)
 end
 
 function raas.acf_rwy_rel_pitch(te, ote, len)
@@ -2335,6 +2338,20 @@ function raas.acf_rwy_rel_pitch(te, ote, len)
 
 	local rwy_angle = math.deg(math.asin((ote - te) / len))
 	return dr.pitch[0] - rwy_angle
+end
+
+-- Checks if at the current rate of deceleration, we are going to come to
+-- a complete stop before traveling `dist_rmng' (in meters). Returns true
+-- if we are going to stop before that, false otherwise.
+function raas.decel_check(dist_rmng)
+	local cur_gs = dr.gs[0]
+	local decel_rate = (cur_gs - last_gs) / raas.const.EXEC_INTVAL
+	if decel_rate >= 0 then
+		return false
+	end
+	local t = cur_gs / (-decel_rate)
+	local d = cur_gs * t + 0.5 * decel_rate * t * t
+	return d < dist_rmng
 end
 
 function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
@@ -2368,7 +2385,7 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 		    rhdg < raas.const.HDG_ALIGN_THRESH and
 		    gs > raas.const.SLOW_ROLL_THRESH then
 			raas.perform_rwy_dist_remaining_callouts(opp_thr_v,
-			    pos_v, msg)
+			    pos_v)
 		else
 			raas.stop_check_reset(arpt_id, rwy_id)
 		end
@@ -2394,19 +2411,14 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 			local dist_lim = math.max(len / 2, math.min(len,
 			    RAAS_min_landing_dist))
 			if dist < dist_lim then
+				local prepend = nil
 				if not long_landing_ann then
-					local msg = {"long_land", "long_land"}
+					prepend = {"long_land", "long_land"}
 					long_landing_ann = true
-					if raas.dist_to_msg(dist, msg) then
-						msg[#msg + 1] = "rmng"
-					end
-					raas.play_msg(msg,
-					    raas.const.MSG_PRIO_HIGH)
-				else
-					raas.
-					    perform_rwy_dist_remaining_callouts(
-					    opp_thr_v, pos_v)
+					logMsg("long landing")
 				end
+				raas.perform_rwy_dist_remaining_callouts(
+				    opp_thr_v, pos_v, prepend)
 			end
 		end
 		return
@@ -2422,8 +2434,19 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 		maxspd = gs
 	end
 	local rpitch = raas.acf_rwy_rel_pitch(te, ote, rwy["len"])
-	if gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH or landing or
-	    (dist < RAAS_min_rotation_dist and
+	-- We want to perform distance remaining callouts if:
+	-- 1) we are NOT landing and speed has decayed below the rejected
+	--    takeoff threshold, or
+	-- 2) we ARE landing, distance remaining is below the stop readout
+	--    cutoff and our deceleration is insufficient to stop within the
+	--    remaining distance, or
+	-- 3) we are NOT landing, distance remaining is below the rotation
+	--    threshold and our pitch angle to the runway indicates that
+	--    rotation has not yet been initiated.
+	if (not landing and gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH) or
+	    (landing and dist < RAAS_stop_dist_cutoff and
+	    not raas.decel_check(dist)) or
+	    (not landing and dist < RAAS_min_rotation_dist and
 	    dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH and
 	    rpitch < RAAS_min_rotation_angle) then
 		raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
@@ -3013,6 +3036,7 @@ function raas.exec()
 	end
 
 	last_elev = dr.elev[0]
+	last_gs = dr.gs[0]
 end
 
 function raas.shutdown()
