@@ -2037,7 +2037,7 @@ function raas.closest_rwy_end(pos, rwy)
 end
 
 -- Translates a runway identifier into a suffix suitable for passing to
--- raas_play_msg for announcing whether the runway is left, center or right.
+-- raas.play_msg for announcing whether the runway is left, center or right.
 -- If no suffix is present, returns nil.
 function raas.rwy_lcr_msg(str)
 	assert(str ~= nil)
@@ -2057,7 +2057,7 @@ function raas.rwy_lcr_msg(str)
 	return nil
 end
 
--- Given a runway ID, appends appropriate messages suitable for raas_play_msg
+-- Given a runway ID, appends appropriate messages suitable for raas.play_msg
 -- to say it out loud.
 function raas.rwy_id_to_msg(rwy_id, msg)
 	assert(rwy_id ~= nil)
@@ -2072,7 +2072,7 @@ function raas.rwy_id_to_msg(rwy_id, msg)
 end
 
 -- Given a distance in meters, converts it into a message suitable for
--- raas_play_msg based on the user's current imperial/metric settings.
+-- raas.play_msg based on the user's current imperial/metric settings.
 function raas.dist_to_msg(dist, msg)
 	assert(dist ~= nil)
 	assert(msg ~= nil)
@@ -3159,24 +3159,52 @@ function raas.load_msg_table()
 	end
 end
 
+-- Message priority is one of MSG_PRIO_LOW, MSG_PRIO_MED or MSG_PRIO_HIGH.
+-- These determine how conflicts in message playback resolved between
+-- the message passed to play_msg and the one being currently played (cur_msg):
+-- 1) if cur_msg is higher priority than the play_msg argument, the play_msg
+--	argument is silently dropped
+-- 2) if cur_msg and the play_msg argument are equal priority, the play_msg
+--	argument is appended to cur_msg and is played immediately following it.
+-- 3) if cur_msg is lower priority than the play_msg argument, the cur_msg
+--	is immediately stopped and the play_msg argument is played instead.
 function raas.play_msg(msg, prio)
 	assert(prio ~= nil)
+	raas.dbg.log("play_msg", 1, "Playing message" .. table.show(msg) ..
+	    " at priority " .. prio)
 	-- suppress message if GPWS is blaring an alert
 	if dr.gpws_ann[0] ~= 0 then
 		return
 	end
 	if not table.isempty(cur_msg) then
 		if cur_msg["prio"] > prio then
+			raas.dbg.log("play_msg", 2, "msg prio " .. prio ..
+			    " lower than cur_msg prio " .. cur_msg["prio"] ..
+			    ", suppressing playback")
 			return
 		end
-		if cur_msg["snd"] ~= nil then
+		if cur_msg["snd"] ~= nil and cur_msg["prio"] < prio then
+			raas.dbg.log("play_msg", 2, "msg prio " .. prio ..
+			    " higher than cur_msg prio " .. cur_msg["prio"] ..
+			    ", stopping cur_msg")
 			stop_sound(cur_msg["snd"])
+			cur_msg = {}
 		end
-		cur_msg = {}
 	end
 
-	cur_msg["msg" ] = msg
-	cur_msg["playing"] = 0
+	if cur_msg["msg"] == nil then
+		raas.dbg.log("play_msg", 2, "no cur_msg, playing from idx 0")
+		cur_msg["msg"] = msg
+	else
+		raas.dbg.log("play_msg", 2, "cur_msg playing, " ..
+		    "appending our message")
+		for i = 1, #msg do
+			cur_msg["msg"][#cur_msg["msg"] + 1] = msg[i]
+		end
+	end
+	if cur_msg["playing"] == nil then
+		cur_msg["playing"] = 0
+	end
 	cur_msg["prio"] = prio
 end
 
