@@ -275,6 +275,7 @@ raas.const.TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 raas.const.MIN_BUS_VOLT = 11			-- Volts
 raas.const.BUS_LOAD_AMPS = 2			-- Amps
 raas.const.XRAAS_apt_dat_cache_version = 3
+raas.const.UNITS_APPEND_INTVAL = 120		-- seconds
 
 raas.const.MSG_PRIO_LOW = 1
 raas.const.MSG_PRIO_MED = 2
@@ -390,17 +391,19 @@ local TATL_source = nil
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
 	["5"] = {}, ["6"] = {}, ["7"] = {}, ["8"] = {}, ["9"] = {}, ["30"] = {},
-	["alt_set"] = {}, ["apch"] = {}, ["caution"] = {}, ["center"] = {},
-	["flaps"] = {}, ["hundred"] = {}, ["left"] = {}, ["long_land"] = {},
-	["on_rwy"] = {}, ["on_twy"] = {}, ["right"] = {}, ["rmng"] = {},
-	["short_rwy"] = {}, ["thousand"] = {}, ["too_fast"] = {},
-	["too_high"] = {}, ["twy"] = {}, ["unstable"] = {}
+	["alt_set"] = {}, ["apch"] = {}, ["avail"] = {}, ["caution"] = {},
+	["center"] = {}, ["feet"] = {}, ["flaps"] = {}, ["hundred"] = {},
+	["left"] = {}, ["long_land"] = {}, ["meters"] = {}, ["on_rwy"] = {},
+	["on_twy"] = {}, ["right"] = {}, ["rmng"] = {}, ["short_rwy"] = {},
+	["thousand"] = {}, ["too_fast"] = {}, ["too_high"] = {}, ["twy"] = {},
+	["unstable"] = {}
 }
 local cur_msg = {}
 local view_is_ext = false
 local bus_loaded = -1
 local last_elev = 0
 local last_gs = 0	-- in m/s
+local last_units_call = 0
 
 -- Checks if RAAS_debug has index `category' set to a value of greater than
 -- or equal to `level' and if yes, prints "RAAS_debug[<category>]: <msg>"
@@ -2071,58 +2074,98 @@ function raas.rwy_id_to_msg(rwy_id, msg)
 	msg[#msg + 1] = raas.rwy_lcr_msg(rwy_id)
 end
 
+-- Converts a thousands value to the proper single-digit pronunciation
+function raas.thousands_msg(thousands, msg)
+	if thousands >= 10 then
+		msg[#msg + 1] = tostring(thousands / 10)
+		msg[#msg + 1] = tostring(thousands % 10)
+	else
+		msg[#msg + 1] = tostring(thousands)
+	end
+end
+
 -- Given a distance in meters, converts it into a message suitable for
 -- raas.play_msg based on the user's current imperial/metric settings.
-function raas.dist_to_msg(dist, msg)
+function raas.dist_to_msg(dist, msg, div_by_100)
 	assert(dist ~= nil)
 	assert(msg ~= nil)
 
-	if RAAS_use_imperial then
-		local dist_ft = dist * 3.281
-		if dist_ft >= 1000 then
-			local thousands = math.floor(dist_ft / 1000)
-			if thousands > 9 then
-				-- we don't have a '10' message
-				return false
-			end
-			msg[#msg + 1] = tostring(thousands)
-			msg[#msg + 1] = "thousand"
-		elseif dist_ft >= 500 then
-			msg[#msg + 1] = "5"
-			msg[#msg + 1] = "hundred"
-		elseif dist_ft >= 100 then
-			msg[#msg + 1] = "1"
-			msg[#msg + 1] = "hundred"
-		else
-			msg[#msg + 1] = "0"
-		end
-	else
-		local dist_300incr = math.floor(dist / 300) * 300
-		local dist_thousands = math.floor(dist_300incr / 1000)
-		local dist_hundreds = dist_300incr % 1000
-		if dist_thousands > 0 and dist_hundreds > 0 then
-			msg[#msg + 1] = tostring(dist_thousands)
-			msg[#msg + 1] = "thousand"
-			msg[#msg + 1] = tostring(dist_hundreds / 100)
-			msg[#msg + 1] = "hundred"
-		elseif dist_thousands > 0 then
-			msg[#msg + 1] = tostring(dist_thousands)
-			msg[#msg + 1] = "thousand"
-		elseif dist >= 100 then
-			if dist_hundreds > 0 then
-				msg[#msg + 1] = tostring(math.floor(
-				    dist_hundreds / 100))
+	if not div_by_100 then
+		if RAAS_use_imperial then
+			local dist_ft = dist * 3.281
+			if dist_ft >= 1000 then
+				local thousands = math.floor(dist_ft / 1000)
+				raas.thousands_msg(thousands, msg)
+				msg[#msg + 1] = "thousand"
+			elseif dist_ft >= 500 then
+				msg[#msg + 1] = "5"
 				msg[#msg + 1] = "hundred"
-			else
+			elseif dist_ft >= 100 then
 				msg[#msg + 1] = "1"
 				msg[#msg + 1] = "hundred"
+			else
+				msg[#msg + 1] = "0"
 			end
-		elseif dist >= 30 then
-			msg[#msg + 1] = "30"
 		else
+			local dist_300incr = math.floor(dist / 300) * 300
+			local dist_thousands = math.floor(dist_300incr / 1000)
+			local dist_hundreds = dist_300incr % 1000
+			if dist_thousands > 0 and dist_hundreds > 0 then
+				raas.thousands_msg(dist_thousands, msg)
+				msg[#msg + 1] = "thousand"
+				msg[#msg + 1] = tostring(dist_hundreds / 100)
+				msg[#msg + 1] = "hundred"
+			elseif dist_thousands > 0 then
+				msg[#msg + 1] = tostring(dist_thousands)
+				msg[#msg + 1] = "thousand"
+			elseif dist >= 100 then
+				if dist_hundreds > 0 then
+					msg[#msg + 1] = tostring(math.floor(
+					    dist_hundreds / 100))
+					msg[#msg + 1] = "hundred"
+				else
+					msg[#msg + 1] = "1"
+					msg[#msg + 1] = "hundred"
+				end
+			elseif dist >= 30 then
+				msg[#msg + 1] = "30"
+			else
+				msg[#msg + 1] = "0"
+			end
+		end
+	else
+		local thousands, hundreds
+		if RAAS_use_imperial then
+			local dist_ft = dist * 3.281
+			thousands = math.floor(dist_ft / 1000)
+			hundreds = math.floor((dist_ft % 1000) / 100)
+		else
+			thousands = math.floor(dist / 1000)
+			hundreds = math.floor((dist % 1000) / 100)
+		end
+		if thousands ~= 0 then
+			raas.thousands_msg(thousands, msg)
+			msg[#msg + 1] = "thousand"
+		end
+		if hundreds ~= 0 then
+			msg[#msg + 1] = tostring(hundreds)
+			msg[#msg + 1] = "hundred"
+		end
+		if thousands == 0 and hundreds == 0 then
 			msg[#msg + 1] = "0"
 		end
 	end
+
+	local now = os.clock()
+
+	if now - last_units_call > raas.const.UNITS_APPEND_INTVAL then
+		if RAAS_use_imperial then
+			msg[#msg + 1] = "feet"
+		else
+			msg[#msg + 1] = "meters"
+		end
+	end
+	last_units_call = now
 
 	return true
 end
@@ -2209,7 +2252,7 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 
 	raas.rwy_id_to_msg(rwy_id, msg)
 	if dist < RAAS_min_takeoff_dist and not landing and
-	    raas.dist_to_msg(dist, msg) then
+	    raas.dist_to_msg(dist, msg, false) then
 		msg[#msg + 1] = "rmng"
 	end
 
@@ -2325,7 +2368,7 @@ function raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v, prepend)
 		msg = prepend
 	end
 
-	raas.dist_to_msg(dist, msg)
+	raas.dist_to_msg(dist, msg, false)
 	msg[#msg + 1] = "rmng"
 	theinfo["ann"] = true
 	raas.play_msg(msg, raas.const.MSG_PRIO_MED)
@@ -2665,7 +2708,9 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 				    RAAS_min_landing_dist then
 					msg[#msg + 1] = "caution"
 					msg[#msg + 1] = "short_rwy"
-					msg[#msg + 1] = "short_rwy"
+					raas.dist_to_msg(rwy["llen" .. suffix],
+					    msg, true)
+					msg[#msg + 1] = "avail"
 					msg_prio = raas.const.MSG_PRIO_HIGH
 				end
 			end
@@ -3183,11 +3228,13 @@ function raas.play_msg(msg, prio)
 			    ", suppressing playback")
 			return
 		end
-		if cur_msg["snd"] ~= nil and cur_msg["prio"] < prio then
+		if cur_msg["prio"] < prio then
 			raas.dbg.log("play_msg", 2, "msg prio " .. prio ..
 			    " higher than cur_msg prio " .. cur_msg["prio"] ..
 			    ", stopping cur_msg")
-			stop_sound(cur_msg["snd"])
+			if cur_msg["snd"] ~= nil then
+				stop_sound(cur_msg["snd"])
+			end
 			cur_msg = {}
 		end
 	end
