@@ -267,6 +267,8 @@ raas.const.RWY_APCH_FLAP4_THRESH = 300		-- feet
 raas.const.ARPT_APCH_BLW_ELEV_THRESH = 500	-- feet
 raas.const.RWY_APCH_ALT_MAX = 700		-- feet
 raas.const.RWY_APCH_ALT_MIN = 320		-- feet
+raas.const.SHORT_RWY_APCH_ALT_MAX = 390		-- feet
+raas.const.SHORT_RWY_APCH_ALT_MIN = 320		-- feet
 raas.const.RWY_APCH_SUPP_WINDOWS = {		-- suppress 'approaching'
     {["max"] = 520, ["min"] = 480},		-- annunciations in these
     {["max"] = 420, ["min"] = 380},		-- altitude windows
@@ -365,6 +367,7 @@ local dbg_enabled = false
 local on_rwy_ann = {}
 local apch_rwy_ann = {}
 local air_apch_rwy_ann = {}
+local air_apch_short_rwy_ann = false
 local air_apch_flap1_ann = {}
 local air_apch_flap2_ann = {}
 local air_apch_flap3_ann = {}
@@ -2706,8 +2709,6 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 				raas.rwy_id_to_msg(rwy_id, msg)
 				if rwy["llen" .. suffix] <
 				    RAAS_min_landing_dist then
-					msg[#msg + 1] = "caution"
-					msg[#msg + 1] = "short_rwy"
 					raas.dist_to_msg(rwy["llen" .. suffix],
 					    msg, true)
 					msg[#msg + 1] = "avail"
@@ -2715,6 +2716,17 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 				end
 			end
 			air_apch_rwy_ann[arpt_id .. rwy_id] = true
+		end
+
+		if alt - telev < raas.const.SHORT_RWY_APCH_ALT_MAX and
+		    alt - telev > raas.const.SHORT_RWY_APCH_ALT_MIN and
+		    rwy["llen" .. suffix] < RAAS_min_landing_dist and
+		    not air_apch_short_rwy_ann then
+			msg[#msg + 1] = "caution"
+			msg[#msg + 1] = "short_rwy"
+			msg[#msg + 1] = "short_rwy"
+			msg_prio = raas.const.MSG_PRIO_HIGH
+			air_apch_short_rwy_ann = true
 		end
 
 		if not table.isempty(msg) then
@@ -2805,6 +2817,9 @@ function raas.air_runway_approach()
 			-- the maximum annunciation altitude.
 			off_rwy_ann = false
 		end
+	end
+	if not in_apch_bbox then
+		air_apch_short_rwy_ann = false
 	end
 end
 
