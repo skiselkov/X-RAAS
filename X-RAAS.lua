@@ -2356,6 +2356,8 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	-- If we are not at all on the appropriate runway heading, don't
 	-- generate any annunciations
 	if rhdg >= 90 then
+		-- reset the annunciation if the aircraft turns around fully
+		on_rwy_ann[arpt_id .. rwy_id] = nil
 		return
 	end
 
