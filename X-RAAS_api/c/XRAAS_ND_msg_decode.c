@@ -59,25 +59,25 @@ XRAAS_ND_msg_decode(int dr_value, char decoded_msg[MSGLEN], int *color_code)
 
 	switch (msg_type) {
 	case ALERT_FLAPS:
-		strlcpy(decoded_msg, "FLAPS", MSGLEN);
+		strcpy(decoded_msg, "FLAPS");
 		return (1);
 	case ALERT_TOO_HIGH:
-		strlcpy(decoded_msg, "TOO HIGH", MSGLEN);
+		strcpy(decoded_msg, "TOO HIGH");
 		return (1);
 	case ALERT_TOO_FAST:
-		strlcpy(decoded_msg, "TOO FAST", MSGLEN);
+		strcpy(decoded_msg, "TOO FAST");
 		return (1);
 	case ALERT_UNSTABLE:
-		strlcpy(decoded_msg, "UNSTABLE", MSGLEN);
+		strcpy(decoded_msg, "UNSTABLE");
 		return (1);
 	case ALERT_TWY:
-		strlcpy(decoded_msg, "TAXIWAY", MSGLEN);
+		strcpy(decoded_msg, "TAXIWAY");
 		return (1);
 	case ALERT_SHORT_RWY:
-		strlcpy(decoded_msg, "SHORT RUNWAY", MSGLEN);
+		strcpy(decoded_msg, "SHORT RUNWAY");
 		return (1);
 	case ALERT_ALTM_SETTING:
-		strlcpy(decoded_msg, "ALTM SETTING", MSGLEN);
+		strcpy(decoded_msg, "ALTM SETTING");
 		return (1);
 	case ALERT_APP:
 	case ALERT_ON: {
@@ -102,7 +102,7 @@ XRAAS_ND_msg_decode(int dr_value, char decoded_msg[MSGLEN], int *color_code)
 		return (1);
 	}
 	case ALERT_LONG_LAND:
-		strlcpy(decoded_msg, "LONG LANDING", MSGLEN);
+		strcpy(decoded_msg, "LONG LANDING");
 		return (1);
 	}
 
