@@ -1456,20 +1456,27 @@ function raas.find_all_apt_dats()
 	return apt_dats
 end
 
--- Reloads the Custom Data/GNS430/navdata/Airports.txt and populates our
--- apt_dat airports with the latest info in it, notably:
+-- Reloads ~/GNS430/navdata/Airports.txt and populates our apt_dat airports
+-- with the latest info in it, notably:
 -- *) transition altitudes & transition levels for the airports
 -- *) runway threshold elevation, glide path angle & threshold crossing height
 function raas.load_airports_txt()
+	-- We first try the Custom Data version, as that's more up to date
 	local airports_fname = raas.const.xpdir .. "Custom Data" .. DIRSEP ..
 	    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
 	local fp = io.open(airports_fname)
 	local last_arpt = nil
 
 	if fp == nil then
-		logMsg("X-RAAS: missing Airports.txt, please check your " ..
-		    "navdata and recreate the cache")
-		return
+		-- Try the Airports.txt shipped with X-Plane.
+		airports_fname = raas.const.xpdir .. "Resources" .. DIRSEP ..
+		    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
+		fp = io.open(airports_fname)
+		if == nil then
+			logMsg("X-RAAS: missing Airports.txt, please check " ..
+			    "your navdata and recreate the cache")
+			return
+		end
 	end
 
 	for line in fp:lines() do
