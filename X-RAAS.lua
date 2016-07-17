@@ -279,6 +279,43 @@ raas.const.BUS_LOAD_AMPS = 2			-- Amps
 raas.const.XRAAS_apt_dat_cache_version = 3
 raas.const.UNITS_APPEND_INTVAL = 120		-- seconds
 
+-- This is what we set into dr.gpws_ann when we want to communicate to
+-- the aircraft's FMS that it should display a message on the ND. Value
+-- '0' is reserved for 'nothing'.
+--
+-- Since the dataref is an int and we need to annunciate various messages,
+-- we split this int into several bitfields:
+-- bits 0 - 7  (8 bits):	message ID
+-- bits 8 - 13 (6 bits):	numeric runway ID:
+--				'00' means 'taxiway'
+--				'01' through '36' means a runway ID
+--				'37' means 'RWYS' (i.e. multiple runways)
+-- bits 14 - 15 (2 bits):	'0' means 'no suffix'
+--				'1' means 'RIGHT'
+--				'2' means 'LEFT'
+--				'3' means 'CENTER'
+-- bits 16 - 23 (8 bits):	Runway length available to the nearest 100
+--				feet or meters. '0' means 'do not display'.
+-- Bits 8 through 23 are only used by the ND_ALERT_APP and ND_ALERT_ON messages.
+raas.const.ND_ALERT_FLAPS = 1		-- 'FLAPS' message on ND
+raas.const.ND_ALERT_TOO_HIGH = 2	-- 'TOO HIGH' message on ND
+raas.const.ND_ALERT_TOO_FAST = 3	-- 'TOO FAST' message on ND
+raas.const.ND_ALERT_UNSTABLE = 4	-- 'UNSTABLE' message on ND
+raas.const.ND_ALERT_TWY = 5		-- 'TAXIWAY' message on ND
+raas.const.ND_ALERT_SHORT_RWY = 6	-- 'SHORT RUNWAY' message on ND
+raas.const.ND_ALERT_ALTM_SETTING = 7	-- 'ALTM SETTING' message on ND
+
+-- These two messages encode what we're approaching/on in bits 8 through 15
+raas.const.ND_ALERT_APP = 8		-- 'APP XX' or 'APP XX ZZ' messages.
+--					'XX' means runway ID (8 - 15).
+--					'ZZ' means runway length (bits 16 - 23).
+raas.const.ND_ALERT_ON = 9		-- 'ON XX' or 'ON XX ZZ' messages.
+--					'XX' means runway ID (bits 8 - 15).
+--					'ZZ' means runway length (bits 16 - 23).
+
+raas.const.ND_ALERT_LONG_LAND = 10
+
+
 raas.const.MSG_PRIO_LOW = 1
 raas.const.MSG_PRIO_MED = 2
 raas.const.MSG_PRIO_HIGH = 3
@@ -307,6 +344,10 @@ RAAS_disable_ext_view = true
 RAAS_min_landing_flap = 0.5			-- ratio
 RAAS_min_takeoff_flap = 0.1			-- ratio
 RAAS_max_takeoff_flap = 0.75			-- ratio
+
+RAAS_ND_alerts_enabled = true
+RAAS_ND_alert_overlay_enabled = true
+RAAS_ND_alert_timeout = 7			-- seconds
 
 RAAS_on_rwy_warn_initial = 60			-- seconds
 RAAS_on_rwy_warn_repeat = 120			-- seconds
@@ -362,6 +403,7 @@ local cur_arpts = {}
 local raas_start_time = nil
 local raas_last_exec_time = nil
 local last_airport_reload = 0
+local ND_alert_start_time = 0
 
 local airport_geo_table = {}
 local apt_dat = {}
@@ -1127,6 +1169,11 @@ function raas.reset()
 	dr.ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
 	dr.gpws_warn = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
 	dr.gpws_ann = dataref_table("sim/cockpit2/annunciators/GPWS")
+
+	-- This is an ugly hack, but we can't create custom datarefs from
+	-- within Lua
+	dr.ND_alert = dataref_table(
+	    "sim/multiplayer/position/plane19_taxi_light_on")
 
 	-- Unfortunately at this moment electrical loading is broken,
 	-- because X-Plane resets plugin_bus_load_amps when the aircraft
@@ -2217,6 +2264,8 @@ function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
 				cur_msg["msg"] = {"apch", "rwys"}
 				cur_msg["prio"] = raas.const.MSG_PRIO_MED
 				annunciated_rwys = true
+				raas.ND_alert(raas.const.ND_ALERT_APP, false,
+				    "37")
 			end
 			if on_ground then
 				apch_rwys_ann = true
@@ -2231,6 +2280,8 @@ function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
 		if (on_ground and not apch_rwys_ann) or
 		    (not on_ground and not air_apch_rwys_ann) or
 		    not annunciated_rwys then
+			local dist_ND = nil
+
 			msg = {"apch"}
 			raas.rwy_id_to_msg(rwy_name, msg)
 			msg_prio = raas.const.MSG_PRIO_LOW
@@ -2239,9 +2290,12 @@ function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
 				raas.dist_to_msg(rwy_len, msg, true)
 				msg[#msg + 1] = "avail"
 				msg_prio = raas.const.MSG_PRIO_HIGH
+				dist_ND = rwy_len
 			end
 
 			raas.play_msg(msg, msg_prio)
+			raas.ND_alert(raas.const.ND_ALERT_APP, dist_ND ~= nil,
+			    rwy_name, dist_ND)
 		end
 	end
 
@@ -2325,11 +2379,15 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	local msg = {"on_rwy"}
 	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
 	local flaprqst = dr.flaprqst[0]
+	local dist_ND = nil
+	local allow_on_rwy_ND_alert = true
 
 	raas.rwy_id_to_msg(rwy_id, msg)
-	if dist < RAAS_min_takeoff_dist and not landing and
-	    raas.dist_to_msg(dist, msg, false) then
-		msg[#msg + 1] = "rmng"
+	if dist < RAAS_min_takeoff_dist and not landing then
+		if raas.dist_to_msg(dist, msg, true) then
+			dist_ND = dist
+			msg[#msg + 1] = "avail"
+		end
 	end
 
 	if (flaprqst < RAAS_min_takeoff_flap or
@@ -2337,9 +2395,16 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	    not raas.gpws_flaps_ovrd() then
 		msg[#msg + 1] = "flaps"
 		msg[#msg + 1] = "flaps"
+
+		allow_on_rwy_ND_alert = false
+		raas.ND_alert(raas.const.ND_ALERT_FLAPS, true)
 	end
 
 	raas.play_msg(msg, raas.const.MSG_PRIO_HIGH)
+	if allow_on_rwy_ND_alert then
+		raas.ND_alert(raas.const.ND_ALERT_ON, dist_ND ~= nil, rwy_id,
+		    dist_ND)
+	end
 end
 
 function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
@@ -2409,6 +2474,7 @@ function raas.takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	if dist < RAAS_min_takeoff_dist then
 		raas.play_msg({"caution", "short_rwy", "short_rwy"},
 		    raas.const.MSG_PRIO_HIGH)
+		raas.ND_alert(raas.const.ND_ALERT_SHORT_RWY, true)
 	end
 end
 
@@ -2539,6 +2605,8 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 				if not long_landing_ann then
 					prepend = {"long_land", "long_land"}
 					long_landing_ann = true
+					raas.ND_alert(
+					    raas.const.ND_ALERT_LONG_LAND, true)
 				end
 				raas.perform_rwy_dist_remaining_callouts(
 				    opp_thr_v, pos_v, prepend)
@@ -2644,6 +2712,7 @@ function raas.ground_on_runway_aligned()
 			on_twy_ann = true
 			raas.play_msg({"caution", "on_twy", "on_twy"},
 			    raas.const.MSG_PRIO_HIGH)
+			raas.ND_alert(raas.const.ND_ALERT_ON, true, "")
 		end
 	elseif dr.gs[0] < raas.const.SPEED_THRESH or
 	    dr.rad_alt[0] >= raas.const.RADALT_GRD_THRESH then
@@ -2693,9 +2762,13 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 						msg[#msg + 1] = "pause"
 					end
 					msg[#msg + 1] = "flaps"
+					raas.ND_alert(raas.const.ND_ALERT_FLAPS,
+					    true)
 				else
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
+					raas.ND_alert(
+					    raas.const.ND_ALERT_UNSTABLE, true)
 				end
 			else
 				raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
@@ -2714,9 +2787,13 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 						msg[#msg + 1] = "pause"
 					end
 					msg[#msg + 1] = "too_high"
+					raas.ND_alert(
+					    raas.const.ND_ALERT_TOO_HIGH, true)
 				else
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
+					raas.ND_alert(
+					    raas.const.ND_ALERT_UNSTABLE, true)
 				end
 			else
 				raas.dbg.log("apch_conf_chk", 1,
@@ -2807,6 +2884,7 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			msg[#msg + 1] = "short_rwy"
 			msg_prio = raas.const.MSG_PRIO_HIGH
 			air_apch_short_rwy_ann = true
+			raas.ND_alert(raas.const.ND_ALERT_SHORT_RWY, true)
 		end
 
 		if not table.isempty(msg) then
@@ -2888,6 +2966,7 @@ function raas.air_runway_approach()
 			    not off_rwy_ann and not raas.gpws_terr_ovrd() then
 				raas.play_msg({"caution", "twy", "caution",
 				    "twy"}, raas.const.MSG_PRIO_HIGH)
+				raas.ND_alert(raas.const.ND_ALERT_TWY, true)
 			end
 			off_rwy_ann = true
 		else
@@ -3063,6 +3142,8 @@ function raas.altimeter_setting()
 			    -- Set baro is out of bounds for QFE
 			    d_qfe > const.ALTM_SETTING_QFE_ERR_LIMIT then
 				raas.play_msg({"alt_set"}, const.MSG_PRIO_LOW)
+				raas.ND_alert(raas.const.ND_ALERT_ALTM_SETTING,
+				    true)
 			end
 			TATL_transition = -1
 		elseif TATL_state == "fl" and now - TATL_transition >
@@ -3073,6 +3154,8 @@ function raas.altimeter_setting()
 			    d_ref)
 			if d_ref > const.ALTM_SETTING_BARO_ERR_LIMIT then
 				raas.play_msg({"alt_set"}, const.MSG_PRIO_LOW)
+				raas.ND_alert(raas.const.ND_ALERT_ALTM_SETTING,
+				    true)
 			end
 			TATL_transition = -1
 		end
@@ -3134,6 +3217,11 @@ function raas.exec()
 		return
 	end
 	raas_last_exec_time = now
+
+	if dr.ND_alert[0] > 1 and
+	    now - ND_alert_start_time > RAAS_ND_alert_timeout then
+		dr.ND_alert[0] = 0
+	end
 
 	raas.load_nearest_airports(nil)
 
@@ -3351,6 +3439,52 @@ function raas.play_msg(msg, prio)
 	cur_msg["prio"] = prio
 end
 
+function raas.ND_alert(msg, amber, rwy_ID, dist)
+	if not RAAS_ND_alerts_enabled then
+		return
+	end
+
+	raas.dbg.log("ND_alert", 1, "msg: " .. msg .. " rwy_ID: " ..
+	    tostring(rwy_ID) .. " dist: " .. tostring(dist) .. " amber: " ..
+	    tostring(amber))
+
+	if amber then
+		msg = bit.bor(msg, 0x40)
+	end
+
+	-- encode the optional runway ID field
+	if rwy_ID ~= nil and rwy_ID ~= "" then
+		local num, suffix
+
+		num = tonumber(rwy_ID:sub(1, 2))
+		suffix = rwy_ID:sub(3, 3)
+		msg = bit.bor(msg, bit.lshift(num, 8))
+		if suffix == "R" then
+			msg = bit.bor(msg, bit.lshift(1, 14))
+		elseif suffix == "L" then
+			msg = bit.bor(msg, bit.lshift(2, 14))
+		elseif suffix == "C" then
+			msg = bit.bor(msg, bit.lshift(3, 14))
+		end
+	end
+
+	-- encode the optional distance field
+	if dist ~= nil then
+		if RAAS_use_imperial then
+			msg = bit.bor(msg, bit.lshift(bit.band(math.floor(
+			    raas.m2ft(dist) / 100), 0xff), 16))
+		else
+			msg = bit.bor(msg, bit.lshift(bit.band(math.floor(
+			    dist / 100), 0xff), 16))
+		end
+	end
+
+	if dr.gpws_ann[0] == 0 then
+		dr.ND_alert[0] = msg
+		ND_alert_start_time = os.clock()
+	end
+end
+
 function raas.set_sound_on(flag)
 	local val
 	if flag then
@@ -3413,11 +3547,39 @@ function raas.snd_sched()
 	end
 end
 
-function load_config(cfgname)
+function raas.ND_alert_HUD()
+	local dr_value = dr.ND_alert[0]
+	local msg, color, graphics
+
+	if dr_value == 0 or dr_value == 1 then
+		return
+	end
+
+	msg, color = XRAAS_ND_msg_decode(dr_value)
+	if msg == nil or view_is_ext or not raas.is_on() then
+		return
+	end
+
+	graphics = require 'graphics'
+
+	local width = graphics.measure_string(msg, "Helvetica_18")
+	graphics.set_color(0, 0, 0, 0.67)
+	graphics.draw_rectangle((SCREEN_WIDTH - width) / 2 - 8,
+	    SCREEN_HIGHT * 0.98 - 27,
+	    (SCREEN_WIDTH + width) / 2 + 8, SCREEN_HIGHT * 0.98)
+	if color == 0 then
+		graphics.set_color(0, 1, 0, 1)
+	else
+		graphics.set_color(1, 1, 0, 1)
+	end
+	graphics.draw_string_Helvetica_18((SCREEN_WIDTH - width) / 2,
+	    SCREEN_HIGHT * 0.98 - 20, msg)
+end
+
+function raas.load_config(cfgname)
 	local cfg_f = io.open(cfgname)
 	if cfg_f ~= nil then
 		cfg_f:close()
-		--local cfg = cfg_f:read("*all")
 		local f, err = loadfile(cfgname)
 		if f ~= nil then
 			f()
@@ -3430,8 +3592,8 @@ function load_config(cfgname)
 end
 
 function raas.load_configs()
-	load_config(SCRIPT_DIRECTORY .. "X-RAAS.cfg")
-	load_config(AIRCRAFT_PATH .. "X-RAAS.cfg")
+	raas.load_config(SCRIPT_DIRECTORY .. "X-RAAS.cfg")
+	raas.load_config(AIRCRAFT_PATH .. "X-RAAS.cfg")
 end
 
 function raas.show_init_msg()
@@ -3469,6 +3631,34 @@ function raas.chk_acf_incompat()
 	return false
 end
 
+-- This loads our ND message decoder. This serves both to test the code and
+-- to implement the X-RAAS native alert display overlay HUD.
+function raas.load_ND_decoder()
+	local fname = SCRIPT_DIRECTORY .. "X-RAAS_api" .. DIRSEP .. "lua" ..
+	    DIRSEP .. "XRAAS_ND_msg_decode.lua"
+
+	local decoder_f = io.open(fname)
+	if decoder_f == nil then
+		raas.init_msg = "X-RAAS: installation error: " ..
+		    "cannot load file " .. fname
+		logMsg(raas.init_msg)
+		return
+	end
+	decoder_f:close()
+
+	local f, err = loadfile(fname)
+	if f ~= nil then
+		f()
+	else
+		raas.init_msg = "X-RAAS: installation error in " ..
+		    "file " .. fname .. ": " .. tostring(err)
+		logMsg(raas.init_msg)
+	end
+end
+
+if RAAS_ND_alerts_enabled and RAAS_ND_alert_overlay_enabled then
+	raas.load_ND_decoder()
+end
 raas.load_configs()
 raas.reset()
 
@@ -3514,6 +3704,10 @@ raas.map_apt_dats()
 
 do_every_frame('raas.exec()')
 do_every_draw('raas.snd_sched()')
+
+if RAAS_ND_alerts_enabled and RAAS_ND_alert_overlay_enabled then
+	do_every_draw('raas.ND_alert_HUD()')
+end
 
 -- FlyWithLua prior to 2.4.1 didn't have do_on_exit
 if do_on_exit ~= nil then
