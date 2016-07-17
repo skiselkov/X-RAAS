@@ -2286,7 +2286,8 @@ function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
 			raas.rwy_id_to_msg(rwy_name, msg)
 			msg_prio = raas.const.MSG_PRIO_LOW
 
-			if not on_ground and rwy_len < RAAS_min_landing_dist then
+			if not on_ground and rwy_len < RAAS_min_landing_dist
+			    then
 				raas.dist_to_msg(rwy_len, msg, true)
 				msg[#msg + 1] = "avail"
 				msg_prio = raas.const.MSG_PRIO_HIGH
@@ -2384,9 +2385,12 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 
 	raas.rwy_id_to_msg(rwy_id, msg)
 	if dist < RAAS_min_takeoff_dist and not landing then
+		-- This nesting is needed to avoid dist_to_msg resetting
+		-- the units callout time in case we end up not using this
+		-- callout due to the conditions above.
 		if raas.dist_to_msg(dist, msg, true) then
 			dist_ND = dist
-			msg[#msg + 1] = "avail"
+			msg[#msg + 1] = "rmng"
 		end
 	end
 
@@ -2511,10 +2515,12 @@ function raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v, prepend)
 		msg = prepend
 	end
 
-	raas.dist_to_msg(dist, msg, false)
-	msg[#msg + 1] = "rmng"
 	theinfo["ann"] = true
-	raas.play_msg(msg, raas.const.MSG_PRIO_MED)
+
+	if raas.dist_to_msg(dist, msg, false) then
+		msg[#msg + 1] = "rmng"
+		raas.play_msg(msg, raas.const.MSG_PRIO_MED)
+	end
 end
 
 function raas.acf_rwy_rel_pitch(te, ote, len)
