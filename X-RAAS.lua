@@ -1472,7 +1472,7 @@ function raas.load_airports_txt()
 		airports_fname = raas.const.xpdir .. "Resources" .. DIRSEP ..
 		    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
 		fp = io.open(airports_fname)
-		if == nil then
+		if fp == nil then
 			logMsg("X-RAAS: missing Airports.txt, please check " ..
 			    "your navdata and recreate the cache")
 			return
