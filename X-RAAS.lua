@@ -234,7 +234,7 @@ raas.const.RWY_PROXIMITY_LON_DISPL = 609.57	-- meters, 2000 ft
 raas.const.RWY_PROXIMITY_TIME_FACT = 2		-- seconds
 raas.const.LANDING_ROLLOUT_TIME_FACT = 1	-- seconds
 raas.const.RADALT_GRD_THRESH = 5		-- feet
-raas.const.RADALT_FLARE_THRESH = 50		-- feet
+raas.const.RADALT_FLARE_THRESH = 100		-- feet
 raas.const.RADALT_DEPART_THRESH = 100		-- feet
 raas.const.STARTUP_DELAY = 3			-- seconds
 raas.const.INIT_MSG_TIMEOUT = 25		-- seconds
@@ -269,18 +269,18 @@ raas.const.RWY_APCH_ALT_MAX = 700		-- feet
 raas.const.RWY_APCH_ALT_MIN = 320		-- feet
 raas.const.SHORT_RWY_APCH_ALT_MAX = 390		-- feet
 raas.const.SHORT_RWY_APCH_ALT_MIN = 320		-- feet
-raas.const.RWY_APCH_SUPP_WINDOWS = {		-- suppress 'approaching'
-    {["max"] = 520, ["min"] = 480},		-- annunciations in these
-    {["max"] = 420, ["min"] = 380},		-- altitude windows
-}
+raas.const.RWY_APCH_SUPP_WINDOWS = {		-- Suppress 'approaching'
+    {["max"] = 530, ["min"] = 480},		-- annunciations in these
+    {["max"] = 430, ["min"] = 380},		-- altitude windows (based
+}						-- on radio altitude).
 raas.const.TATL_REMOTE_ARPT_DIST_LIMIT = 500000	-- meters
 raas.const.MIN_BUS_VOLT = 11			-- Volts
 raas.const.BUS_LOAD_AMPS = 2			-- Amps
 raas.const.XRAAS_apt_dat_cache_version = 3
 raas.const.UNITS_APPEND_INTVAL = 120		-- seconds
 
--- This is what we set into dr.gpws_ann when we want to communicate to
--- the aircraft's FMS that it should display a message on the ND. Value
+-- This is what we set our ND alert dataref to when we want to communicate
+-- to the aircraft's FMS that it should display a message on the ND. Value
 -- '0' is reserved for 'nothing'.
 --
 -- Since the dataref is an int and we need to annunciate various messages,
@@ -352,6 +352,9 @@ RAAS_ND_alert_timeout = 7			-- seconds
 RAAS_on_rwy_warn_initial = 60			-- seconds
 RAAS_on_rwy_warn_repeat = 120			-- seconds
 RAAS_on_rwy_warn_max_n = 3
+
+RAAS_GPWS_priority_dataref = "sim/cockpit2/annunciators/GPWS"
+RAAS_GPWS_inop_dataref = "sim/cockpit/warnings/annunciators/GPWS"
 
 -- Although this can be overridden by the config file, it is not documented
 -- deliberately, as understanding how this table behaves requires some amount
@@ -1167,8 +1170,16 @@ function raas.reset()
 	dr.num_engines = dataref_table("sim/aircraft/engine/acf_num_engines")
 	dr.mtow = dataref_table("sim/aircraft/weight/acf_m_max")
 	dr.ICAO = dataref_table("sim/aircraft/view/acf_ICAO")
-	dr.gpws_warn = dataref_table("sim/cockpit/warnings/annunciators/GPWS")
-	dr.gpws_ann = dataref_table("sim/cockpit2/annunciators/GPWS")
+	if RAAS_GPWS_priority_dataref ~= nil then
+		dr.gpws_prio = dataref_table(RAAS_GPWS_priority_dataref)
+	else
+		dr.gpws_prio = {[0] = 0}
+	end
+	if RAAS_GPWS_inop_dataref ~= nil then
+		dr.gpws_inop = dataref_table(RAAS_GPWS_inop_dataref)
+	else
+		dr.gpws_inop = {[0] = 0}
+	end
 
 	-- This is an ugly hack, but we can't create custom datarefs from
 	-- within Lua
@@ -1203,6 +1214,10 @@ function raas.gear_is_up()
 		end
 	end
 	return true
+end
+
+function raas.GPWS_has_priority()
+	return dr.gpws_prio[0] ~= 0
 end
 
 -- Checks if the aircraft has a terrain override mode on the GPWS and if it
@@ -2433,7 +2448,11 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	-- generate any annunciations
 	if rhdg >= 90 then
 		-- reset the annunciation if the aircraft turns around fully
-		on_rwy_ann[arpt_id .. rwy_id] = nil
+		if on_rwy_ann[arpt_id .. rwy_id] ~= nil then
+			raas.dbg.log("ann_state", 1, "on_rwy_ann[" ..
+			    arpt_id .. rwy_id .. "] = nil")
+			on_rwy_ann[arpt_id .. rwy_id] = nil
+		end
 		return
 	end
 
@@ -2455,6 +2474,8 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 		if dr.gs[0] < raas.const.SPEED_THRESH then
 			raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 		end
+		raas.dbg.log("ann_state", 1, "on_rwy_ann[" .. arpt_id ..
+		    rwy_id .. "] = true")
 		on_rwy_ann[arpt_id .. rwy_id] = true
 	end
 end
@@ -2614,15 +2635,18 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 			    len * (1 - RAAS_long_land_lim_fract)),
 			    math.min(len, RAAS_min_landing_dist))
 			if dist < dist_lim then
-				local prepend = nil
 				if not long_landing_ann then
-					prepend = {"long_land", "long_land"}
+					raas.play_msg({"long_land",
+					    "long_land"},
+					    raas.const.MSG_PRIO_HIGH)
+					raas.dbg.log("ann_state", 1,
+					    "long_landing_ann = true")
 					long_landing_ann = true
 					raas.ND_alert(
 					    raas.const.ND_ALERT_LONG_LAND, true)
 				end
 				raas.perform_rwy_dist_remaining_callouts(
-				    opp_thr_v, pos_v, prepend)
+				    opp_thr_v, pos_v, nil)
 			end
 		end
 		return
@@ -2678,8 +2702,16 @@ function raas.ground_on_runway_aligned_arpt(arpt)
 			raas.on_rwy_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
 			    pos_v, rwy["dt1v"])
 		else
-			on_rwy_ann[arpt_id .. rwy["id1"]] = nil
-			on_rwy_ann[arpt_id .. rwy["id2"]] = nil
+			if on_rwy_ann[arpt_id .. rwy["id1"]] ~= nil then
+				raas.dbg.log("ann_state", 1, "on_rwy_ann[" ..
+				    arpt_id .. rwy["id1"] .. "] = nil")
+				on_rwy_ann[arpt_id .. rwy["id1"]] = nil
+			end
+			if on_rwy_ann[arpt_id .. rwy["id2"]] ~= nil then
+				raas.dbg.log("ann_state", 1, "on_rwy_ann[" ..
+				    arpt_id .. rwy["id2"] .. "] = nil")
+				on_rwy_ann[arpt_id .. rwy["id2"]] = nil
+			end
 		end
 		if raas.vect2.in_poly(pos_v, rwy["asda_bbox"]) then
 			raas.stop_check(arpt_id, rwy, "1", hdg, pos_v)
@@ -2877,7 +2909,7 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		-- If we are below 700 ft AFE and we haven't annunciated yet
 		if alt - telev < raas.const.RWY_APCH_ALT_MAX and
 		    air_apch_rwy_ann[arpt_id .. rwy_id] == nil and
-		    not raas.number_in_rngs(alt - telev,
+		    not raas.number_in_rngs(dr.rad_alt[0],
 		    raas.const.RWY_APCH_SUPP_WINDOWS) then
 			-- Don't annunciate if we are too low
 			if alt - telev > raas.const.RWY_APCH_ALT_MIN then
@@ -3200,7 +3232,7 @@ function raas.is_on()
 
 	turned_on = ((dr.bus_volt[0] > raas.const.MIN_BUS_VOLT or
 	    dr.bus_volt[1] > raas.const.MIN_BUS_VOLT) and
-	    dr.avionics_on[0] == 1 and dr.gpws_warn[0] ~= 1)
+	    dr.avionics_on[0] == 1 and dr.gpws_inop[0] ~= 1)
 
 	if turned_on then
 		if dr.bus_volt[0] < raas.const.MIN_BUS_VOLT then
@@ -3231,9 +3263,16 @@ function raas.exec()
 	end
 	raas_last_exec_time = now
 
-	if dr.ND_alert[0] > 1 and
+	if dr.ND_alert[0] > 0 and
 	    now - ND_alert_start_time > RAAS_ND_alert_timeout then
-		dr.ND_alert[0] = 0
+		if raas.GPWS_has_priority() then
+			-- If GPWS priority has overridden us, keep the
+			-- alert displayed until after the priority
+			-- has been lifted.
+			ND_alert_start_time = now
+		else
+			dr.ND_alert[0] = 0
+		end
 	end
 
 	raas.load_nearest_airports(nil)
@@ -3247,7 +3286,10 @@ function raas.exec()
 			arriving = true
 			raas.dbg.log("flt_state", 1, "arriving = true")
 		end
-		long_landing_ann = false
+		if long_landing_ann then
+			raas.dbg.log("ann_state", 1, "long_landing_ann = false")
+			long_landing_ann = false
+		end
 	elseif dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
 		if departed then
 			raas.dbg.log("flt_state", 1, "landing = true")
@@ -3259,7 +3301,8 @@ function raas.exec()
 			arriving = false
 		end
 	end
-	if dr.gs[0] < raas.const.SPEED_THRESH then
+	if dr.gs[0] < raas.const.SPEED_THRESH and long_landing_ann then
+		raas.dbg.log("ann_state", 1, "long_landing_ann = false")
 		long_landing_ann = false
 	end
 
@@ -3414,10 +3457,6 @@ function raas.play_msg(msg, prio)
 	assert(prio ~= nil)
 	raas.dbg.log("play_msg", 1, "Playing message" .. table.show(msg) ..
 	    " at priority " .. prio)
-	-- suppress message if GPWS is blaring an alert
-	if dr.gpws_ann[0] ~= 0 then
-		return
-	end
 	if not table.isempty(cur_msg) then
 		if cur_msg["prio"] > prio then
 			raas.dbg.log("play_msg", 2, "msg prio " .. prio ..
@@ -3492,10 +3531,8 @@ function raas.ND_alert(msg, amber, rwy_ID, dist)
 		end
 	end
 
-	if dr.gpws_ann[0] == 0 then
-		dr.ND_alert[0] = msg
-		ND_alert_start_time = os.clock()
-	end
+	dr.ND_alert[0] = msg
+	ND_alert_start_time = os.clock()
 end
 
 function raas.set_sound_on(flag)
@@ -3527,8 +3564,16 @@ function raas.snd_sched()
 		view_is_ext = true
 	end
 
-	-- stop audio when power is down or if the GPWS is sounding an alert
-	if not raas.is_on() or dr.gpws_ann[0] ~= 0 then
+	-- stop audio when GPWS is overriding us - we'll restart the
+	-- annunciation once it's over
+	if raas.GPWS_has_priority() and cur_msg["snd"] ~= nil then
+		stop_sound(cur_msg["snd"])
+		cur_msg["playing"] = 0
+		return
+	end
+
+	-- stop audio when power is down
+	if not raas.is_on() then
 		if cur_msg["snd"] ~= nil then
 			stop_sound(cur_msg["snd"])
 		end
@@ -3564,7 +3609,7 @@ function raas.ND_alert_HUD()
 	local dr_value = dr.ND_alert[0]
 	local msg, color, graphics
 
-	if dr_value == 0 or dr_value == 1 then
+	if dr_value == 0 then
 		return
 	end
 
