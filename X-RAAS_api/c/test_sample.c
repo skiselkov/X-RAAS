@@ -66,8 +66,8 @@ main(void)
 	test_decode(0x00002309);
 	test_decode(0x00006309);
 	test_decode(0x00002509);
-	test_decode(0x00142349);
-	test_decode(0x00086349);
+	test_decode(0x0014E349);
+	test_decode(0x0008A349);
 	test_decode(0x0000004A);
 
 	return (0);

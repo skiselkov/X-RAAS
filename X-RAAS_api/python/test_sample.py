@@ -33,7 +33,7 @@ def test_decode(value):
 
 	msg = result[0]
 	color = result[1]
-	print("0x%08x\t%s\t%s" % (value, "GREEN" if color == 1 else "AMBER",
+	print("0x%08x\t%s\t%s" % (value, "GREEN" if color == 0 else "AMBER",
 	    msg))
 
 print("RAW VALUE\tCOLOR\tMESSAGE\n"
@@ -54,6 +54,6 @@ test_decode(0x00000049)
 test_decode(0x00002309)
 test_decode(0x00006309)
 test_decode(0x00002509)
-test_decode(0x00142349)
-test_decode(0x00086349)
+test_decode(0x0014E349)
+test_decode(0x0008A349)
 test_decode(0x0000004A)
