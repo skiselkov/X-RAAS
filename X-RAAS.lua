@@ -305,6 +305,11 @@ raas.const.ND_ALERT_TWY = 5		-- 'TAXIWAY' message on ND
 raas.const.ND_ALERT_SHORT_RWY = 6	-- 'SHORT RUNWAY' message on ND
 raas.const.ND_ALERT_ALTM_SETTING = 7	-- 'ALTM SETTING' message on ND
 
+-- ND alert severity
+raas.const.ND_ALERT_ROUTINE = 0
+raas.const.ND_ALERT_NONROUTINE = 1
+raas.const.ND_ALERT_CAUTION = 2
+
 -- These two messages encode what we're approaching/on in bits 8 through 15
 raas.const.ND_ALERT_APP = 8		-- 'APP XX' or 'APP XX ZZ' messages.
 --					'XX' means runway ID (8 - 15).
@@ -346,7 +351,9 @@ RAAS_min_takeoff_flap = 0.1			-- ratio
 RAAS_max_takeoff_flap = 0.75			-- ratio
 
 RAAS_ND_alerts_enabled = true
+RAAS_ND_alert_filter = raas.const.ND_ALERT_ROUTINE
 RAAS_ND_alert_overlay_enabled = true
+RAAS_ND_alert_overlay_force = false
 RAAS_ND_alert_timeout = 7			-- seconds
 
 RAAS_on_rwy_warn_initial = 60			-- seconds
@@ -380,8 +387,8 @@ RAAS_accel_stop_distances = {
 }
 
 RAAS_too_high_enabled = true
-local RAAS_gpa_limit_mult = 2			-- multiplier
-local RAAS_gpa_limit_max = 8			-- degrees
+RAAS_gpa_limit_mult = 2			-- multiplier
+RAAS_gpa_limit_max = 8			-- degrees
 
 RAAS_alt_setting_enabled = true
 RAAS_qnh_alt_enabled = true
@@ -402,48 +409,47 @@ raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRSEP .. ".." .. DIRSEP ..
     ".." .. DIRSEP .. ".." .. DIRSEP
 
 local dr = {}
-local cur_arpts = {}
-local raas_start_time = nil
-local raas_last_exec_time = nil
-local last_airport_reload = 0
-local ND_alert_start_time = 0
 
-local airport_geo_table = {}
-local apt_dat = {}
+raas.cur_arpts = {}
+raas.start_time = nil
+raas.last_exec_time = nil
+raas.last_airport_reload = 0
+raas.ND_alert_start_time = 0
 
-local dbg_enabled = false
+raas.airport_geo_table = {}
+raas.apt_dat = {}
 
-local on_rwy_ann = {}
-local apch_rwy_ann = {}
-local apch_rwys_ann = false	-- when multiple met the criteria
-local air_apch_rwy_ann = {}
-local air_apch_rwys_ann = false	-- when multiple met the criteria
-local air_apch_short_rwy_ann = false
-local air_apch_flap1_ann = {}
-local air_apch_flap2_ann = {}
-local air_apch_flap3_ann = {}
-local air_apch_gpa1_ann = {}
-local air_apch_gpa2_ann = {}
-local air_apch_gpa3_ann = {}
-local on_twy_ann = false
-local long_landing_ann = false
-local short_rwy_takeoff_chk = false
-local on_rwy_timer = -1
-local on_rwy_warnings = 0
-local off_rwy_ann = false
+raas.on_rwy_ann = {}
+raas.apch_rwy_ann = {}
+raas.apch_rwys_ann = false	-- when multiple met the criteria
+raas.air_apch_rwy_ann = {}
+raas.air_apch_rwys_ann = false	-- when multiple met the criteria
+raas.air_apch_short_rwy_ann = false
+raas.air_apch_flap1_ann = {}
+raas.air_apch_flap2_ann = {}
+raas.air_apch_flap3_ann = {}
+raas.air_apch_gpa1_ann = {}
+raas.air_apch_gpa2_ann = {}
+raas.air_apch_gpa3_ann = {}
+raas.on_twy_ann = false
+raas.long_landing_ann = false
+raas.short_rwy_takeoff_chk = false
+raas.on_rwy_timer = -1
+raas.on_rwy_warnings = 0
+raas.off_rwy_ann = false
 
-local accel_stop_max_spd = {}
-local accel_stop_ann_initial = 0
-local departed = false
-local arriving = false
-local landing = false
+raas.accel_stop_max_spd = {}
+raas.accel_stop_ann_initial = 0
+raas.departed = false
+raas.arriving = false
+raas.landing = false
 
-local TA = 0
-local TL = 0
-local TATL_field_elev = nil
-local TATL_state = "alt"
-local TATL_transition = -1
-local TATL_source = nil
+raas.TA = 0
+raas.TL = 0
+raas.TATL_field_elev = nil
+raas.TATL_state = "alt"
+raas.TATL_transition = -1
+raas.TATL_source = nil
 
 local messages = {
 	["0"] = {}, ["1"] = {}, ["2"] = {}, ["3"] = {}, ["4"] = {},
@@ -455,12 +461,12 @@ local messages = {
 	["pause"] = {}, ["short_rwy"] = {}, ["thousand"] = {},
 	["too_fast"] = {}, ["too_high"] = {}, ["twy"] = {}, ["unstable"] = {}
 }
-local cur_msg = {}
-local view_is_ext = false
-local bus_loaded = -1
-local last_elev = 0
-local last_gs = 0	-- in m/s
-local last_units_call = 0
+raas.cur_msg = {}
+raas.view_is_ext = false
+raas.bus_loaded = -1
+raas.last_elev = 0
+raas.last_gs = 0	-- in m/s
+raas.last_units_call = 0
 
 -- Checks if RAAS_debug has index `category' set to a value of greater than
 -- or equal to `level' and if yes, prints "RAAS_debug[<category>]: <msg>"
@@ -521,7 +527,7 @@ function shallowcopy(orig)
 end
 
 -- Returns a pair of integer indices that can be used into the
--- airport_geo_table to retrieve the tile for a given latitude & longitude.
+-- raas.airport_geo_table to retrieve the tile for a given latitude & longitude.
 function raas.geo_table_idx(lat, lon)
 	if lat < -80 or lat > 80 then
 		return nil, nil
@@ -551,14 +557,14 @@ function raas.geo_table_get_tile(lat, lon, create)
 		return nil, false
 	end
 
-	lat_tbl = airport_geo_table[lat]
+	lat_tbl = raas.airport_geo_table[lat]
 	if lat_tbl == nil then
 		if not create then
 			return nil, false
 		end
 		created = true
 		lat_tbl = {}
-		airport_geo_table[lat] = lat_tbl
+		raas.airport_geo_table[lat] = lat_tbl
 	end
 
 	lon_tbl = lat_tbl[lon]
@@ -1198,8 +1204,8 @@ function raas.reset()
 	--    "plugin_bus_load_amps")
 	dr.plug_bus_load = {[0] = 0, [1] = 0}
 
-	raas_start_time = os.clock()
-	raas_last_exec_time = raas_start_time
+	raas.start_time = os.clock()
+	raas.last_exec_time = raas.start_time
 end
 
 -- Converts an quantity which is calculated per execution cycle of X-RAAS
@@ -1326,7 +1332,7 @@ function raas.rwy_is_hard(t)
 end
 
 -- Parses an apt.dat (or X-RAAS_apt_dat.cache) file, parses its contents
--- and reconstructs our apt_dat table. This is called at the start of
+-- and reconstructs our raas.apt_dat table. This is called at the start of
 -- X-RAAS to populate the airport and runway database. The 
 function raas.map_apt_dat(apt_dat_fname)
 	assert(apt_dat_fname ~= nil)
@@ -1368,7 +1374,7 @@ function raas.map_apt_dat(apt_dat_fname)
 			icao = nil
 			apt = nil
 
-			if apt_dat[new_icao] == nil then
+			if raas.apt_dat[new_icao] == nil then
 				arpt_cnt = arpt_cnt + 1
 				apt = {
 				    ["elev"] = tonumber(comps[2]),
@@ -1379,7 +1385,7 @@ function raas.map_apt_dat(apt_dat_fname)
 				    ["lon"] = lon
 				}
 				icao = new_icao
-				apt_dat[icao] = apt
+				raas.apt_dat[icao] = apt
 				if lat ~= nil and lon ~= nil then
 					local tile = raas.geo_table_get_tile(
 					    lat, lon, false)
@@ -1474,8 +1480,8 @@ function raas.find_all_apt_dats()
 	return apt_dats
 end
 
--- Reloads ~/GNS430/navdata/Airports.txt and populates our apt_dat airports
--- with the latest info in it, notably:
+-- Reloads ~/GNS430/navdata/Airports.txt and populates our raas.apt_dat
+-- airports with the latest info in it, notably:
 -- *) transition altitudes & transition levels for the airports
 -- *) runway threshold elevation, glide path angle & threshold crossing height
 function raas.load_airports_txt()
@@ -1505,7 +1511,7 @@ function raas.load_airports_txt()
 			local lon = tonumber(comps[5])
 			local TA = tonumber(comps[7])
 			local TL = tonumber(comps[8])
-			local db_arpt = apt_dat[icao]
+			local db_arpt = raas.apt_dat[icao]
 
 			last_arpt = nil
 
@@ -1561,8 +1567,8 @@ function raas.create_directories(dirnames)
 	else
 		-- Because CMD.EXE on Windows is dumb as a sack of hammers,
 		-- we need to feed it commands in 8191-character increments,
-		-- because NOBODY would ever need more than 8191 characters on
-		-- a line, right?
+		-- because NOBODY would ever need more than 8191 characters
+		-- on a line, right?
 		for i, dirname in pairs(dirnames) do
 			-- the 290 character reserve here is because CMD.EXE
 			-- counts the hostname and current directory into
@@ -1631,9 +1637,8 @@ function raas.write_apt_dat(icao, arpt)
 	local fp = io.open(fname, "a")
 	assert(fp ~= nil)
 
-	fp:write("1 " .. elev .. " 0 0 " .. icao ..
-	    " TA:" .. TA .. " TL:" .. TL .. " LAT:" .. lat ..
-	    " LON:" .. lon .. "\n")
+	fp:write("1 " .. elev .. " 0 0 " .. icao .. " TA:" .. TA ..
+	    " TL:" .. TL .. " LAT:" .. lat .. " LON:" .. lon .. "\n")
 	for i, rwy in pairs(rwys) do
 		local id1, lat1, lon1, dis1, bla1, gpa1, tch1, te1 =
 		    rwy["id1"], rwy["lat1"], rwy["lon1"], rwy["dis1"],
@@ -1671,7 +1676,7 @@ function raas.write_apt_dat(icao, arpt)
 	fp:close()
 end
 
--- Takes the current state of the apt_dat table and writes all the airports
+-- Takes the current state of the raas.apt_dat table and writes all the airports
 -- in it to the X-RAAS_apt_dat.cache so that a subsequent run of X-RAAS can
 -- pick this info up.
 function raas.recreate_apt_dat_cache()
@@ -1694,9 +1699,9 @@ function raas.recreate_apt_dat_cache()
 	for i = 1, #apt_dat_files do
 		raas.map_apt_dat(apt_dat_files[i])
 	end
-	for icao, arpt in pairs(apt_dat) do
+	for icao, arpt in pairs(raas.apt_dat) do
 		if table.isempty(arpt["rwys"]) then
-			apt_dat[icao] = nil
+			raas.apt_dat[icao] = nil
 		end
 	end
 	raas.load_airports_txt()
@@ -1709,7 +1714,7 @@ function raas.recreate_apt_dat_cache()
 
 	local dirs = {}
 	local dir_set = {}
-	for icao, arpt in pairs(apt_dat) do
+	for icao, arpt in pairs(raas.apt_dat) do
 		local lat, lon = arpt["lat"], arpt["lon"]
 		if lat ~= nil and lon ~= nil then
 			dir_set[raas.apt_dat_cache_dir(lat, lon)] = true
@@ -1722,13 +1727,13 @@ function raas.recreate_apt_dat_cache()
 	dir_set = nil
 	dirs = nil
 
-	for icao, arpt in pairs(apt_dat) do
+	for icao, arpt in pairs(raas.apt_dat) do
 		if arpt["lat"] ~= nil then
 			raas.write_apt_dat(icao, arpt)
 		end
 	end
 
-	apt_dat = {}
+	raas.apt_dat = {}
 end
 
 -- Scans the cached copy of X-RAAS_apt_dat.cache and if it doesn't exist,
@@ -1846,7 +1851,7 @@ function raas.make_apch_prox_bbox(db_rwys, rwy_id, thr_v, width, dir_v, fpp)
 end
 
 -- Given an airport ID and an airport flat plane transform, loads the
--- runway info stored in the apt_dat database into a more easily workable
+-- runway info stored in the raas.apt_dat database into a more easily workable
 -- (but more verbose in terms of used memory) format. This function also
 -- constructs the transformed threshold coordinates and bounding boxes.
 function raas.load_rwy_info(arpt_id, fpp)
@@ -1854,7 +1859,7 @@ function raas.load_rwy_info(arpt_id, fpp)
 	assert(fpp ~= nil)
 
 	local rwys = {}
-	local db_arpt = apt_dat[arpt_id]
+	local db_arpt = raas.apt_dat[arpt_id]
 	local db_rwys = db_arpt["rwys"]
 	local vect2 = raas.vect2
 
@@ -1948,7 +1953,7 @@ end
 -- relevant points for the airport in that space.
 function raas.load_airport(arpt_id)
 	assert(arpt_id ~= nil)
-	local db_arpt = apt_dat[arpt_id]
+	local db_arpt = raas.apt_dat[arpt_id]
 	local lat = db_arpt["lat"]
 	local lon = db_arpt["lon"]
 	assert(lat ~= nil and lon ~= nil)
@@ -1969,7 +1974,7 @@ function raas.load_airport(arpt_id)
 end
 
 -- The actual worker function for raas.find_nearest_airports. Performs the
--- search in a specified airport_geo_table square. Position is a 3-space
+-- search in a specified raas.airport_geo_table square. Position is a 3-space
 -- ECEF vector.
 function raas.find_nearest_airports_tile(pos, lat, lon, arpt_list)
 	assert(pos ~= nil)
@@ -1993,7 +1998,7 @@ end
 
 -- Locates all airports within an raas.const.ARPT_LOAD_LIMIT distance limit
 -- (in meters) of a geographic reference position. The airports are searched
--- for in the apt_dat database and this function returns a table of airport
+-- for in the raas.apt_dat database and this function returns a table of airport
 -- IDs which matched the search.
 function raas.find_nearest_airports(reflat, reflon)
 	assert(reflat ~= nil)
@@ -2023,13 +2028,13 @@ function raas.load_airports_in_tile(lat, lon)
 end
 
 function raas.unload_airports_in_tile(lat, lon)
-	assert(airport_geo_table[lat] ~= nil)
-	local tile = airport_geo_table[lat][lon]
+	assert(raas.airport_geo_table[lat] ~= nil)
+	local tile = raas.airport_geo_table[lat][lon]
 
 	for icao, coords in pairs(tile) do
-		apt_dat[icao] = nil
+		raas.apt_dat[icao] = nil
 	end
-	airport_geo_table[lat][lon] = nil
+	raas.airport_geo_table[lat][lon] = nil
 end
 
 function raas.load_nearest_airport_tiles()
@@ -2054,7 +2059,7 @@ end
 function raas.unload_distant_airport_tiles()
 	local lat, lon = raas.geo_table_idx(dr.lat[0], dr.lon[0])
 
-	for lat_i, lat_tbl in pairs(airport_geo_table) do
+	for lat_i, lat_tbl in pairs(raas.airport_geo_table) do
 		for lon_i, lon_tbl in pairs(lat_tbl) do
 			if lat_i < lat - 1 or lat_i > lat + 1 or
 			    raas.lon_delta(lon_i, lon) > 1 then
@@ -2065,34 +2070,34 @@ function raas.unload_distant_airport_tiles()
 		end
 		if lat_i < lat - 1 or lat_i > lat + 1 then
 			raas.dbg.log("tile", 1, "unloading lat " .. lat_i)
-			airport_geo_table[lat_i] = nil
+			raas.airport_geo_table[lat_i] = nil
 		end
 	end
 end
 
 -- Locates any airports within a 8 nm radius of the aircraft and loads
--- their RAAS data from the apt_dat database. The function then updates
--- cur_arpts with the new information and expunges airports that are no
+-- their RAAS data from the raas.apt_dat database. The function then updates
+-- raas.cur_arpts with the new information and expunges airports that are no
 -- longer in range.
 function raas.load_nearest_airports()
 	local now = os.time()
-	if now - last_airport_reload < raas.const.ARPT_RELOAD_INTVAL then
+	if now - raas.last_airport_reload < raas.const.ARPT_RELOAD_INTVAL then
 		return
 	end
-	last_airport_reload = now
+	raas.last_airport_reload = now
 
 	raas.load_nearest_airport_tiles()
 	raas.unload_distant_airport_tiles()
 	local new_arpts = raas.find_nearest_airports(dr.lat[0], dr.lon[0])
 
-	for arpt_id, arpt in pairs(cur_arpts) do
+	for arpt_id, arpt in pairs(raas.cur_arpts) do
 		if new_arpts[arpt_id] == nil then
-			cur_arpts[arpt_id] = nil
+			raas.cur_arpts[arpt_id] = nil
 		end
 	end
 	for arpt_id, coords in pairs(new_arpts) do
-		if cur_arpts[arpt_id] == nil then
-			cur_arpts[arpt_id] = raas.load_airport(arpt_id)
+		if raas.cur_arpts[arpt_id] == nil then
+			raas.cur_arpts[arpt_id] = raas.load_airport(arpt_id)
 		end
 	end
 end
@@ -2239,7 +2244,7 @@ function raas.dist_to_msg(dist, msg, div_by_100)
 
 	local now = os.clock()
 
-	if now - last_units_call > raas.const.UNITS_APPEND_INTVAL and
+	if now - raas.last_units_call > raas.const.UNITS_APPEND_INTVAL and
 	    RAAS_speak_units then
 		if RAAS_use_imperial then
 			msg[#msg + 1] = "feet"
@@ -2247,15 +2252,15 @@ function raas.dist_to_msg(dist, msg, div_by_100)
 			msg[#msg + 1] = "meters"
 		end
 	end
-	last_units_call = now
+	raas.last_units_call = now
 
 	return true
 end
 
 function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
-	if (on_ground and (apch_rwy_ann[arpt_id .. rwy_id] ~= nil or
-	    on_rwy_ann[arpt_id .. rwy_id])) or
-	    (not on_ground and air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil) then
+	if (on_ground and (raas.apch_rwy_ann[arpt_id .. rwy_id] ~= nil or
+	    raas.on_rwy_ann[arpt_id .. rwy_id])) or
+	    (not on_ground and raas.air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil) then
 		return
 	end
 
@@ -2263,49 +2268,50 @@ function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
 		local msg, msg_prio, force_ann
 		local annunciated_rwys = false
 
-		if (on_ground and apch_rwys_ann) or
-		    (not on_ground and air_apch_rwys_ann) then
+		if (on_ground and raas.apch_rwys_ann) or
+		    (not on_ground and raas.air_apch_rwys_ann) then
 			return
 		end
 
 		-- Multiple runways being approached?
-		if (on_ground and not table.isempty(apch_rwy_ann)) or
-		    (not on_ground and not table.isempty(air_apch_rwy_ann)) then
+		if (on_ground and not table.isempty(raas.apch_rwy_ann)) or
+		    (not on_ground and not table.isempty(raas.air_apch_rwy_ann)) then
 			if on_ground then
 				-- On the ground we don't want to re-annunciate
 				-- "approaching" once the runway is resolved
-				apch_rwy_ann[arpt_id .. rwy_id] = true
+				raas.apch_rwy_ann[arpt_id .. rwy_id] = true
 			else
 				-- In the air, we DO want to re-annunciate
 				-- "approaching" once the runway is resolved
-				air_apch_rwy_ann = {}
+				raas.air_apch_rwy_ann = {}
 			end
 			-- If the "approaching ..." annunciation for the
 			-- previous runway is still playing, try to modify
 			-- it to say "approaching runways"
-			if cur_msg["msg"] ~= nil and
-			    cur_msg["msg"][1] == "apch" and
-			    cur_msg["playing"] <= 1 then
-				cur_msg["msg"] = {"apch", "rwys"}
-				cur_msg["prio"] = raas.const.MSG_PRIO_MED
+			if raas.cur_msg["msg"] ~= nil and
+			    raas.cur_msg["msg"][1] == "apch" and
+			    raas.cur_msg["playing"] <= 1 then
+				raas.cur_msg["msg"] = {"apch", "rwys"}
+				raas.cur_msg["prio"] = raas.const.MSG_PRIO_MED
 				annunciated_rwys = true
-				raas.ND_alert(raas.const.ND_ALERT_APP, false,
-				    "37")
+				raas.ND_alert(raas.const.ND_ALERT_APP,
+				    raas.const.ND_ALERT_ROUTINE, "37")
 			end
 			if on_ground then
-				apch_rwys_ann = true
+				raas.apch_rwys_ann = true
 			else
-				air_apch_rwys_ann = true
+				raas.air_apch_rwys_ann = true
 			end
 			if annunciated_rwys then
 				return
 			end
 		end
 
-		if (on_ground and not apch_rwys_ann) or
-		    (not on_ground and not air_apch_rwys_ann) or
+		if (on_ground and not raas.apch_rwys_ann) or
+		    (not on_ground and not raas.air_apch_rwys_ann) or
 		    not annunciated_rwys then
 			local dist_ND = nil
+			local level = raas.const.ND_ALERT_ROUTINE
 
 			msg = {"apch"}
 			raas.rwy_id_to_msg(rwy_name, msg)
@@ -2317,18 +2323,19 @@ function raas.do_approaching_rwy(arpt_id, rwy_id, rwy_name, rwy_len, on_ground)
 				msg[#msg + 1] = "avail"
 				msg_prio = raas.const.MSG_PRIO_HIGH
 				dist_ND = rwy_len
+				level = raas.const.ND_ALERT_NONROUTINE
 			end
 
 			raas.play_msg(msg, msg_prio)
-			raas.ND_alert(raas.const.ND_ALERT_APP, dist_ND ~= nil,
+			raas.ND_alert(raas.const.ND_ALERT_APP, level,
 			    rwy_name, dist_ND)
 		end
 	end
 
 	if on_ground then
-		apch_rwy_ann[arpt_id .. rwy_id] = true
+		raas.apch_rwy_ann[arpt_id .. rwy_id] = true
 	else
-		air_apch_rwy_ann[arpt_id .. rwy_id] = true
+		raas.air_apch_rwy_ann[arpt_id .. rwy_id] = true
 	end
 end
 
@@ -2350,7 +2357,7 @@ function raas.ground_runway_approach_arpt_rwy(arpt, rwy_id, rwy, pos_v,
 		    raas.closest_rwy_end(pos_v, rwy), 0, true)
 		return true
 	else
-		apch_rwy_ann[arpt_id .. rwy_id] = nil
+		raas.apch_rwy_ann[arpt_id .. rwy_id] = nil
 		return false
 	end
 end
@@ -2380,20 +2387,20 @@ function raas.ground_runway_approach()
 	if dr.rad_alt[0] < raas.const.RADALT_FLARE_THRESH then
 		local vel_v = raas.acf_vel_vector(
 		    raas.const.RWY_PROXIMITY_TIME_FACT)
-		for arpt_id, arpt in pairs(cur_arpts) do
+		for arpt_id, arpt in pairs(raas.cur_arpts) do
 			in_prox = in_prox + raas.ground_runway_approach_arpt(
 			    arpt, vel_v)
 		end
 	end
 
 	if in_prox == 0 then
-		if landing then
-			raas.dbg.log("flt_state", 1, "landing = false")
+		if raas.landing then
+			raas.dbg.log("flt_state", 1, "raas.landing = false")
 		end
-		landing = false
+		raas.landing = false
 	end
 	if in_prox <= 1 then
-		apch_rwys_ann = false
+		raas.apch_rwys_ann = false
 	end
 end
 
@@ -2407,31 +2414,34 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	local flaprqst = dr.flaprqst[0]
 	local dist_ND = nil
 	local allow_on_rwy_ND_alert = true
+	local level = raas.const.ND_ALERT_ROUTINE
 
 	raas.rwy_id_to_msg(rwy_id, msg)
-	if dist < RAAS_min_takeoff_dist and not landing then
+	if dist < RAAS_min_takeoff_dist and not raas.landing then
 		-- This nesting is needed to avoid dist_to_msg resetting
 		-- the units callout time in case we end up not using this
 		-- callout due to the conditions above.
 		if raas.dist_to_msg(dist, msg, true) then
 			dist_ND = dist
+			level = raas.const.ND_ALERT_NONROUTINE
 			msg[#msg + 1] = "rmng"
 		end
 	end
 
 	if (flaprqst < RAAS_min_takeoff_flap or
-	    flaprqst > RAAS_max_takeoff_flap) and not landing and
+	    flaprqst > RAAS_max_takeoff_flap) and not raas.landing and
 	    not raas.gpws_flaps_ovrd() then
 		msg[#msg + 1] = "flaps"
 		msg[#msg + 1] = "flaps"
 
 		allow_on_rwy_ND_alert = false
-		raas.ND_alert(raas.const.ND_ALERT_FLAPS, true)
+		raas.ND_alert(raas.const.ND_ALERT_FLAPS,
+		    raas.const.ND_ALERT_CAUTION)
 	end
 
 	raas.play_msg(msg, raas.const.MSG_PRIO_HIGH)
 	if allow_on_rwy_ND_alert then
-		raas.ND_alert(raas.const.ND_ALERT_ON, dist_ND ~= nil, rwy_id,
+		raas.ND_alert(raas.const.ND_ALERT_ON, level, rwy_id,
 		    dist_ND)
 	end
 end
@@ -2451,21 +2461,21 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	-- generate any annunciations
 	if rhdg >= 90 then
 		-- reset the annunciation if the aircraft turns around fully
-		if on_rwy_ann[arpt_id .. rwy_id] ~= nil then
-			raas.dbg.log("ann_state", 1, "on_rwy_ann[" ..
+		if raas.on_rwy_ann[arpt_id .. rwy_id] ~= nil then
+			raas.dbg.log("ann_state", 1, "raas.on_rwy_ann[" ..
 			    arpt_id .. rwy_id .. "] = nil")
-			on_rwy_ann[arpt_id .. rwy_id] = nil
+			raas.on_rwy_ann[arpt_id .. rwy_id] = nil
 		end
 		return
 	end
 
-	if on_rwy_timer ~= -1 and
-	    ((now - on_rwy_timer > RAAS_on_rwy_warn_initial and
-	    on_rwy_warnings == 0) or
-	    (now - on_rwy_timer - RAAS_on_rwy_warn_initial >
-	    on_rwy_warnings * RAAS_on_rwy_warn_repeat)) and
-	    on_rwy_warnings < RAAS_on_rwy_warn_max_n then
-		on_rwy_warnings = on_rwy_warnings + 1
+	if raas.on_rwy_timer ~= -1 and
+	    ((now - raas.on_rwy_timer > RAAS_on_rwy_warn_initial and
+	    raas.on_rwy_warnings == 0) or
+	    (now - raas.on_rwy_timer - RAAS_on_rwy_warn_initial >
+	    raas.on_rwy_warnings * RAAS_on_rwy_warn_repeat)) and
+	    raas.on_rwy_warnings < RAAS_on_rwy_warn_max_n then
+		raas.on_rwy_warnings = raas.on_rwy_warnings + 1
 		raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 	end
 
@@ -2473,13 +2483,13 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 		return
 	end
 
-	if on_rwy_ann[arpt_id .. rwy_id] == nil then
+	if raas.on_rwy_ann[arpt_id .. rwy_id] == nil then
 		if dr.gs[0] < raas.const.SPEED_THRESH then
 			raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 		end
-		raas.dbg.log("ann_state", 1, "on_rwy_ann[" .. arpt_id ..
+		raas.dbg.log("ann_state", 1, "raas.on_rwy_ann[" .. arpt_id ..
 		    rwy_id .. "] = true")
-		on_rwy_ann[arpt_id .. rwy_id] = true
+		raas.on_rwy_ann[arpt_id .. rwy_id] = true
 	end
 end
 
@@ -2487,9 +2497,9 @@ function raas.stop_check_reset(arpt_id, rwy_id)
 	assert(arpt_id ~= nil)
 	assert(rwy_id ~= nil)
 
-	if accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
-		accel_stop_max_spd[arpt_id .. rwy_id] = nil
-		accel_stop_ann_initial = 0
+	if raas.accel_stop_max_spd[arpt_id .. rwy_id] ~= nil then
+		raas.accel_stop_max_spd[arpt_id .. rwy_id] = nil
+		raas.accel_stop_ann_initial = 0
 		for i, info in pairs(RAAS_accel_stop_distances) do
 			info["ann"] = false
 		end
@@ -2500,16 +2510,17 @@ function raas.takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	assert(opp_thr_v ~= nil)
 	assert(pos_v ~= nil)
 
-	if short_rwy_takeoff_chk then
+	if raas.short_rwy_takeoff_chk then
 		return
 	end
 
 	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
-	short_rwy_takeoff_chk = true
+	raas.short_rwy_takeoff_chk = true
 	if dist < RAAS_min_takeoff_dist then
 		raas.play_msg({"caution", "short_rwy", "short_rwy"},
 		    raas.const.MSG_PRIO_HIGH)
-		raas.ND_alert(raas.const.ND_ALERT_SHORT_RWY, true)
+		raas.ND_alert(raas.const.ND_ALERT_SHORT_RWY,
+		    raas.const.ND_ALERT_CAUTION)
 	end
 end
 
@@ -2568,7 +2579,7 @@ end
 -- if we are going to stop before that, false otherwise.
 function raas.decel_check(dist_rmng)
 	local cur_gs = dr.gs[0]
-	local decel_rate = (cur_gs - last_gs) / raas.const.EXEC_INTVAL
+	local decel_rate = (cur_gs - raas.last_gs) / raas.const.EXEC_INTVAL
 	if decel_rate >= 0 then
 		return false
 	end
@@ -2622,8 +2633,8 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 	if dr.rad_alt[0] > raas.const.RADALT_GRD_THRESH then
 		raas.stop_check_reset(arpt_id, rwy_id)
 		local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] -
-		    last_elev))
-		if departed and
+		    raas.last_elev))
+		if raas.departed and
 		    dr.rad_alt[0] <= raas.const.RADALT_DEPART_THRESH and
 		    clb_rate < raas.const.GOAROUND_CLB_RATE_THRESH then
 			-- Our distance limit is the greater of either:
@@ -2638,15 +2649,16 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 			    len * (1 - RAAS_long_land_lim_fract)),
 			    math.min(len, RAAS_min_landing_dist))
 			if dist < dist_lim then
-				if not long_landing_ann then
+				if not raas.long_landing_ann then
 					raas.play_msg({"long_land",
 					    "long_land"},
 					    raas.const.MSG_PRIO_HIGH)
 					raas.dbg.log("ann_state", 1,
-					    "long_landing_ann = true")
-					long_landing_ann = true
+					    "raas.long_landing_ann = true")
+					raas.long_landing_ann = true
 					raas.ND_alert(
-					    raas.const.ND_ALERT_LONG_LAND, true)
+					    raas.const.ND_ALERT_LONG_LAND,
+					    raas.const.ND_ALERT_CAUTION)
 				end
 				raas.perform_rwy_dist_remaining_callouts(
 				    opp_thr_v, pos_v, nil)
@@ -2655,13 +2667,13 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 		return
 	end
 
-	if not arriving then
+	if not raas.arriving then
 		raas.takeoff_rwy_dist_check(opp_thr_v, pos_v)
 	end
 
-	maxspd = accel_stop_max_spd[arpt_id .. rwy_id]
+	maxspd = raas.accel_stop_max_spd[arpt_id .. rwy_id]
 	if maxspd == nil or gs > maxspd then
-		accel_stop_max_spd[arpt_id .. rwy_id] = gs
+		raas.accel_stop_max_spd[arpt_id .. rwy_id] = gs
 		maxspd = gs
 	end
 	local rpitch = raas.acf_rwy_rel_pitch(te, ote, rwy["len"])
@@ -2674,10 +2686,10 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 	-- 3) we are NOT landing, distance remaining is below the rotation
 	--    threshold and our pitch angle to the runway indicates that
 	--    rotation has not yet been initiated.
-	if (not landing and gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH) or
-	    (landing and dist < RAAS_stop_dist_cutoff and
+	if (not raas.landing and gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH) or
+	    (raas.landing and dist < RAAS_stop_dist_cutoff and
 	    not raas.decel_check(dist)) or
-	    (not landing and dist < RAAS_min_rotation_dist and
+	    (not raas.landing and dist < RAAS_min_rotation_dist and
 	    dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH and
 	    rpitch < RAAS_min_rotation_angle) then
 		raas.perform_rwy_dist_remaining_callouts(opp_thr_v, pos_v)
@@ -2705,15 +2717,15 @@ function raas.ground_on_runway_aligned_arpt(arpt)
 			raas.on_rwy_check(arpt_id, rwy["id2"], hdg, rwy["hdg2"],
 			    pos_v, rwy["dt1v"])
 		else
-			if on_rwy_ann[arpt_id .. rwy["id1"]] ~= nil then
-				raas.dbg.log("ann_state", 1, "on_rwy_ann[" ..
+			if raas.on_rwy_ann[arpt_id .. rwy["id1"]] ~= nil then
+				raas.dbg.log("ann_state", 1, "raas.on_rwy_ann[" ..
 				    arpt_id .. rwy["id1"] .. "] = nil")
-				on_rwy_ann[arpt_id .. rwy["id1"]] = nil
+				raas.on_rwy_ann[arpt_id .. rwy["id1"]] = nil
 			end
-			if on_rwy_ann[arpt_id .. rwy["id2"]] ~= nil then
-				raas.dbg.log("ann_state", 1, "on_rwy_ann[" ..
+			if raas.on_rwy_ann[arpt_id .. rwy["id2"]] ~= nil then
+				raas.dbg.log("ann_state", 1, "raas.on_rwy_ann[" ..
 				    arpt_id .. rwy["id2"] .. "] = nil")
-				on_rwy_ann[arpt_id .. rwy["id2"]] = nil
+				raas.on_rwy_ann[arpt_id .. rwy["id2"]] = nil
 			end
 		end
 		if raas.vect2.in_poly(pos_v, rwy["asda_bbox"]) then
@@ -2732,7 +2744,7 @@ function raas.ground_on_runway_aligned()
 	local on_rwy = false
 
 	if dr.rad_alt[0] < raas.const.RADALT_DEPART_THRESH then
-		for arpt_id, arpt in pairs(cur_arpts) do
+		for arpt_id, arpt in pairs(raas.cur_arpts) do
 			if raas.ground_on_runway_aligned_arpt(arpt) then
 				on_rwy = true
 			end
@@ -2740,31 +2752,32 @@ function raas.ground_on_runway_aligned()
 	end
 
 	if on_rwy and dr.gs[0] < raas.const.STOPPED_THRESH then
-		if on_rwy_timer == -1 then
-			on_rwy_timer = os.time()
+		if raas.on_rwy_timer == -1 then
+			raas.on_rwy_timer = os.time()
 		end
 	else
-		on_rwy_timer = -1
-		on_rwy_warnings = 0
+		raas.on_rwy_timer = -1
+		raas.on_rwy_warnings = 0
 	end
 
 	if not on_rwy then
-		short_rwy_takeoff_chk = false
+		raas.short_rwy_takeoff_chk = false
 	end
 
 	-- Taxiway takeoff check
 	if not on_rwy and dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH and
-	    ((not landing and dr.gs[0] >= raas.const.SPEED_THRESH) or
-	    (landing and dr.gs[0] >= raas.const.HIGH_SPEED_THRESH)) then
-		if not on_twy_ann then
-			on_twy_ann = true
+	    ((not raas.landing and dr.gs[0] >= raas.const.SPEED_THRESH) or
+	    (raas.landing and dr.gs[0] >= raas.const.HIGH_SPEED_THRESH)) then
+		if not raas.on_twy_ann then
+			raas.on_twy_ann = true
 			raas.play_msg({"caution", "on_twy", "on_twy"},
 			    raas.const.MSG_PRIO_HIGH)
-			raas.ND_alert(raas.const.ND_ALERT_ON, true, "")
+			raas.ND_alert(raas.const.ND_ALERT_ON,
+			    raas.const.ND_ALERT_CAUTION, "")
 		end
 	elseif dr.gs[0] < raas.const.SPEED_THRESH or
 	    dr.rad_alt[0] >= raas.const.RADALT_GRD_THRESH then
-		on_twy_ann = false
+		raas.on_twy_ann = false
 	end
 
 	return on_rwy
@@ -2826,7 +2839,7 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 	assert(gpa_ann_table ~= nil)
 	assert(critical ~= nil)
 
-	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev))
+	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - raas.last_elev))
 
 	if alt - elev < ceil and alt - elev > floor and
 	    (not raas.gear_is_up() or not check_gear) and
@@ -2848,12 +2861,13 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 					end
 					msg[#msg + 1] = "flaps"
 					raas.ND_alert(raas.const.ND_ALERT_FLAPS,
-					    true)
+					    raas.const.ND_ALERT_CAUTION)
 				else
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
 					raas.ND_alert(
-					    raas.const.ND_ALERT_UNSTABLE, true)
+					    raas.const.ND_ALERT_UNSTABLE,
+					    raas.const.ND_ALERT_CAUTION)
 				end
 			else
 				raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
@@ -2876,12 +2890,14 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 					end
 					msg[#msg + 1] = "too_high"
 					raas.ND_alert(
-					    raas.const.ND_ALERT_TOO_HIGH, true)
+					    raas.const.ND_ALERT_TOO_HIGH,
+					    raas.const.ND_ALERT_CAUTION)
 				else
 					msg[#msg + 1] = "unstable"
 					msg[#msg + 1] = "unstable"
 					raas.ND_alert(
-					    raas.const.ND_ALERT_UNSTABLE, true)
+					    raas.const.ND_ALERT_UNSTABLE,
+					    raas.const.ND_ALERT_CAUTION)
 				end
 			else
 				raas.dbg.log("apch_conf_chk", 1,
@@ -2936,22 +2952,25 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 
 		if raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP1_THRESH,
-		    raas.const.RWY_APCH_FLAP2_THRESH, msg, air_apch_flap1_ann,
-		    air_apch_gpa1_ann, false, true, dist, true) or
+		    raas.const.RWY_APCH_FLAP2_THRESH, msg,
+		    raas.air_apch_flap1_ann, raas.air_apch_gpa1_ann, false,
+		    true, dist, true) or
 		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP2_THRESH,
-		    raas.const.RWY_APCH_FLAP3_THRESH, msg, air_apch_flap2_ann,
-		    air_apch_gpa2_ann, false, false, dist, false) or
+		    raas.const.RWY_APCH_FLAP3_THRESH, msg,
+		    raas.air_apch_flap2_ann, raas.air_apch_gpa2_ann, false,
+		    false, dist, false) or
 		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP3_THRESH,
-		    raas.const.RWY_APCH_FLAP4_THRESH, msg, air_apch_flap3_ann,
-		    air_apch_gpa3_ann, true, false, dist, false) then
+		    raas.const.RWY_APCH_FLAP4_THRESH, msg,
+		    raas.air_apch_flap3_ann, raas.air_apch_gpa3_ann, true,
+		    false, dist, false) then
 			msg_prio = raas.const.MSG_PRIO_HIGH
 		end
 
 		-- If we are below 700 ft AFE and we haven't annunciated yet
 		if alt - telev < raas.const.RWY_APCH_ALT_MAX and
-		    air_apch_rwy_ann[arpt_id .. rwy_id] == nil and
+		    raas.air_apch_rwy_ann[arpt_id .. rwy_id] == nil and
 		    not raas.number_in_rngs(dr.rad_alt[0],
 		    raas.const.RWY_APCH_SUPP_WINDOWS) then
 			-- Don't annunciate if we are too low
@@ -2960,19 +2979,20 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 				    raas.closest_rwy_end(pos_v, rwy),
 				    rwy["llen" .. suffix], false)
 			end
-			air_apch_rwy_ann[arpt_id .. rwy_id] = true
+			raas.air_apch_rwy_ann[arpt_id .. rwy_id] = true
 		end
 
 		if alt - telev < raas.const.SHORT_RWY_APCH_ALT_MAX and
 		    alt - telev > raas.const.SHORT_RWY_APCH_ALT_MIN and
 		    rwy["llen" .. suffix] < RAAS_min_landing_dist and
-		    not air_apch_short_rwy_ann then
+		    not raas.air_apch_short_rwy_ann then
 			msg[#msg + 1] = "caution"
 			msg[#msg + 1] = "short_rwy"
 			msg[#msg + 1] = "short_rwy"
 			msg_prio = raas.const.MSG_PRIO_HIGH
-			air_apch_short_rwy_ann = true
-			raas.ND_alert(raas.const.ND_ALERT_SHORT_RWY, true)
+			raas.air_apch_short_rwy_ann = true
+			raas.ND_alert(raas.const.ND_ALERT_SHORT_RWY,
+			    raas.const.ND_ALERT_CAUTION)
 		end
 
 		if not table.isempty(msg) then
@@ -2980,9 +3000,9 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		end
 
 		return true
-	elseif air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
+	elseif raas.air_apch_rwy_ann[arpt_id .. rwy_id] ~= nil and
 	    not in_prox_bbox then
-		air_apch_rwy_ann[arpt_id .. rwy_id] = nil
+		raas.air_apch_rwy_ann[arpt_id .. rwy_id] = nil
 	end
 
 	return false
@@ -3009,9 +3029,9 @@ function raas.air_runway_approach_arpt(arpt)
 	local elev = arpt["elev"]
 	if alt > elev + raas.const.RWY_APCH_FLAP1_THRESH or
 	    alt < elev - raas.const.ARPT_APCH_BLW_ELEV_THRESH then
-		raas.reset_airport_approach_table(air_apch_flap1_ann, arpt_id)
-		raas.reset_airport_approach_table(air_apch_flap2_ann, arpt_id)
-		raas.reset_airport_approach_table(air_apch_rwy_ann, arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_flap1_ann, arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_flap2_ann, arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_rwy_ann, arpt_id)
 		return 0
 	end
 
@@ -3036,9 +3056,9 @@ function raas.air_runway_approach()
 	end
 
 	local in_apch_bbox = 0
-	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev))
+	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - raas.last_elev))
 
-	for arpt_id, arpt in pairs(cur_arpts) do
+	for arpt_id, arpt in pairs(raas.cur_arpts) do
 		in_apch_bbox = in_apch_bbox + raas.air_runway_approach_arpt(
 		    arpt)
 	end
@@ -3051,23 +3071,24 @@ function raas.air_runway_approach()
 		if dr.rad_alt[0] <= raas.const.OFF_RWY_HEIGHT_MAX then
 			-- only annunciate if we're above the minimum height
 			if dr.rad_alt[0] >= raas.const.OFF_RWY_HEIGHT_MIN and
-			    not off_rwy_ann and not raas.gpws_terr_ovrd() then
+			    not raas.off_rwy_ann and not raas.gpws_terr_ovrd() then
 				raas.play_msg({"caution", "twy", "caution",
 				    "twy"}, raas.const.MSG_PRIO_HIGH)
-				raas.ND_alert(raas.const.ND_ALERT_TWY, true)
+				raas.ND_alert(raas.const.ND_ALERT_TWY,
+				    raas.const.ND_ALERT_CAUTION)
 			end
-			off_rwy_ann = true
+			raas.off_rwy_ann = true
 		else
 			-- Annunciation gets reset once we climb through
 			-- the maximum annunciation altitude.
-			off_rwy_ann = false
+			raas.off_rwy_ann = false
 		end
 	end
 	if in_apch_bbox == 0 then
-		air_apch_short_rwy_ann = false
+		raas.air_apch_short_rwy_ann = false
 	end
 	if in_apch_bbox <= 1 then
-		air_apch_rwys_ann = false
+		raas.air_apch_rwys_ann = false
 	end
 end
 
@@ -3076,7 +3097,7 @@ function raas.find_nearest_curarpt()
 	local pos_ecef = raas.conv.sph2ecef({dr.lat[0], dr.lon[0]})
 	local cur_arpt
 
-	for arpt_id, arpt in pairs(cur_arpts) do
+	for arpt_id, arpt in pairs(raas.cur_arpts) do
 		local dist = raas.vect3.abs(raas.vect3.sub(arpt["ecef"],
 		    pos_ecef))
 		if dist < min_dist then
@@ -3102,15 +3123,15 @@ function raas.altimeter_setting()
 		local arpt_id = cur_arpt["arpt_id"]
 		raas.dbg.log("altimeter", 2, "find_nearest_curarpt() = " ..
 		    arpt_id)
-		TA = cur_arpt["TA"]
-		TL = cur_arpt["TL"]
-		TATL_field_elev = cur_arpt["elev"]
-		if arpt_id ~= TATL_source then
-			TATL_source = arpt_id
+		raas.TA = cur_arpt["TA"]
+		raas.TL = cur_arpt["TL"]
+		raas.TATL_field_elev = cur_arpt["elev"]
+		if arpt_id ~= raas.TATL_source then
+			raas.TATL_source = arpt_id
 			field_changed = true
-			raas.dbg.log("altimeter", 1, "TATL_source: " ..
-			    arpt_id .. " TA: " .. TA .. " TL: " .. TL ..
-			    " field_elev: " .. TATL_field_elev)
+			raas.dbg.log("altimeter", 1, "raas.TATL_source: " ..
+			    arpt_id .. " TA: " .. raas.TA .. " TL: " ..
+			    raas.TL .. " field_elev: " .. raas.TATL_field_elev)
 		end
 	else
 		local arpt_ref = XPLMFindNavAid(nil, nil, dr.lat[0],
@@ -3129,11 +3150,11 @@ function raas.altimeter_setting()
 			arpt_ecef = raas.conv.sph2ecef({outLat, outLon})
 		end
 
-		if outID ~= nil and TATL_source ~= outID and
+		if outID ~= nil and raas.TATL_source ~= outID and
 		    vect3.abs(vect3.sub(pos_ecef, arpt_ecef)) <
 		    const.TATL_REMOTE_ARPT_DIST_LIMIT then
 			raas.load_airports_in_tile(outLat, outLon)
-			db_arpt = apt_dat[outID]
+			db_arpt = raas.apt_dat[outID]
 			if db_arpt == nil then
 				-- Grab the first airport in that tile
 				local lat_i, lon_i = raas.geo_table_idx(outLat,
@@ -3142,7 +3163,7 @@ function raas.altimeter_setting()
 				    lon_i, false)
 				if tile ~= nil and not table.isempty(tile) then
 					local icao = next(tile)
-					db_arpt = apt_dat[icao]
+					db_arpt = raas.apt_dat[icao]
 					raas.dbg.log("altimeter", 2,
 					    "fallback airport = " ..
 					    tostring(icao))
@@ -3151,77 +3172,77 @@ function raas.altimeter_setting()
 		end
 
 		if db_arpt ~= nil then
-			TA = db_arpt["TA"]
-			TL = db_arpt["TL"]
-			TATL_field_elev = db_arpt["elev"]
-			TATL_source = outID
+			raas.TA = db_arpt["TA"]
+			raas.TL = db_arpt["TL"]
+			raas.TATL_field_elev = db_arpt["elev"]
+			raas.TATL_source = outID
 			field_changed = true
-			raas.dbg.log("altimeter", 1, "TATL_source: " ..
-			    outID .. " TA: " .. TA .. " TL: " .. TL ..
-			    " field_elev: " .. TATL_field_elev)
+			raas.dbg.log("altimeter", 1, "raas.TATL_source: " ..
+			    outID .. " TA: " .. raas.TA .. " TL: " ..
+			    raas.TL .. " field_elev: " .. raas.TATL_field_elev)
 		end
 	end
 
-	if TL == 0 then
+	if raas.TL == 0 then
 		if field_changed then
 			raas.dbg.log("altimeter", 1, "TL = 0")
 		end
-		if TA ~= 0 then
+		if raas.TA ~= 0 then
 			if dr.baro_sl[0] > const.STD_BARO_REF then
-				TL = TA
+				raas.TL = raas.TA
 			else
 				local qnh = dr.baro_sl[0] * 33.85
-				TL = TA + 28 * (1013 - qnh)
+				raas.TL = raas.TA + 28 * (1013 - qnh)
 			end
 			if field_changed then
 				raas.dbg.log("altimeter", 1,
-				    "TL(auto) = " .. TL)
+				    "TL(auto) = " .. raas.TL)
 			end
 		end
 	end
-	if TA == 0 then
+	if raas.TA == 0 then
 		if field_changed then
-			raas.dbg.log("altimeter", 1, "TA(auto) = " .. TA)
+			raas.dbg.log("altimeter", 1, "TA(auto) = " .. raas.TA)
 		end
-		TA = TL
+		raas.TA = raas.TL
 	end
 
 	local elev = raas.m2ft(dr.elev[0])
 
-	if TA ~= 0 and elev > TA and TATL_state == "alt" then
-		TATL_transition = os.time()
-		TATL_state = "fl"
-		raas.dbg.log("altimeter", 1, "elev > TA (" .. TA ..
+	if raas.TA ~= 0 and elev > raas.TA and raas.TATL_state == "alt" then
+		raas.TATL_transition = os.time()
+		raas.TATL_state = "fl"
+		raas.dbg.log("altimeter", 1, "elev > TA (" .. raas.TA ..
 		    ") transitioning TATL_state = fl")
 	end
-	if TL ~= 0 and elev < TA and dr.baro_alt[0] < TL and
+	if raas.TL ~= 0 and elev < raas.TA and dr.baro_alt[0] < raas.TL and
 	    -- If there's a gap between the altitudes and flight levels, don't
 	    -- transition until we're below the TA
-	    (TA == 0 or elev < TA) and TATL_state == "fl" then
-		TATL_transition = os.time()
-		TATL_state = "alt"
-		raas.dbg.log("altimeter", 1, "baro_alt < TL (" .. TL ..
+	    (raas.TA == 0 or elev < raas.TA) and raas.TATL_state == "fl" then
+		raas.TATL_transition = os.time()
+		raas.TATL_state = "alt"
+		raas.dbg.log("altimeter", 1, "baro_alt < TL (" .. raas.TL ..
 		    ") transitioning TATL_state = alt")
 	end
 
 	local now = os.time()
-	if TATL_transition ~= -1 then
+	if raas.TATL_transition ~= -1 then
 		if  -- We have transitioned into ALT mode
-		    TATL_state == "alt" and
+		    raas.TATL_state == "alt" and
 		    -- The fixed timeout has passed, OR
-		    (now - TATL_transition > const.ALTM_SETTING_TIMEOUT or
+		    (now - raas.TATL_transition > const.ALTM_SETTING_TIMEOUT or
 		    -- The field has a known elevation and we are within
 		    -- 1500 feet of it
-		    (TATL_field_elev ~= nil and (elev < TATL_field_elev +
+		    (raas.TATL_field_elev ~= nil and (elev < raas.TATL_field_elev +
 		    const.ALTM_SETTING_ALT_CHK_LIMIT))) then
 			local d_qnh, d_qfe = 0, 0
 
 			if RAAS_qnh_alt_enabled then
 				d_qnh = math.abs(elev - dr.baro_alt[0])
 			end
-			if TATL_field_elev ~= nil and RAAS_qfe_alt_enabled then
+			if raas.TATL_field_elev ~= nil and RAAS_qfe_alt_enabled then
 				d_qfe = math.abs(dr.baro_alt[0] -
-				    (elev - TATL_field_elev))
+				    (elev - raas.TATL_field_elev))
 			end
 			raas.dbg.log("altimeter", 1, "alt check; d_qnh: "
 			    .. d_qnh .. " d_qfe: " .. tostring(d_qfe))
@@ -3231,10 +3252,10 @@ function raas.altimeter_setting()
 			    d_qfe > const.ALTM_SETTING_QFE_ERR_LIMIT then
 				raas.play_msg({"alt_set"}, const.MSG_PRIO_LOW)
 				raas.ND_alert(raas.const.ND_ALERT_ALTM_SETTING,
-				    true)
+				    raas.const.ND_ALERT_CAUTION)
 			end
-			TATL_transition = -1
-		elseif TATL_state == "fl" and now - TATL_transition >
+			raas.TATL_transition = -1
+		elseif raas.TATL_state == "fl" and now - raas.TATL_transition >
 		    const.ALTM_SETTING_TIMEOUT then
 			local d_ref = math.abs(dr.baro_set[0] -
 			    const.STD_BARO_REF)
@@ -3243,9 +3264,9 @@ function raas.altimeter_setting()
 			if d_ref > const.ALTM_SETTING_BARO_ERR_LIMIT then
 				raas.play_msg({"alt_set"}, const.MSG_PRIO_LOW)
 				raas.ND_alert(raas.const.ND_ALERT_ALTM_SETTING,
-				    true)
+				    raas.const.ND_ALERT_CAUTION)
 			end
-			TATL_transition = -1
+			raas.TATL_transition = -1
 		end
 	end
 end
@@ -3253,15 +3274,15 @@ end
 -- Transfers our electrical load to bus number `busnr' (numbered from 0)
 function raas.xfer_elec_bus(busnr)
 	local xbusnr = (busnr + 1) % 2
-	if bus_loaded == xbusnr then
+	if raas.bus_loaded == xbusnr then
 		dr.plug_bus_load[xbusnr] = dr.plug_bus_load[xbusnr] -
 		    raas.const.BUS_LOAD_AMPS
-		bus_loaded = -1
+		raas.bus_loaded = -1
 	end
-	if bus_loaded == -1 then
+	if raas.bus_loaded == -1 then
 		dr.plug_bus_load[busnr] = dr.plug_bus_load[busnr] +
 		    raas.const.BUS_LOAD_AMPS
-		bus_loaded = busnr
+		raas.bus_loaded = busnr
 	end
 end
 
@@ -3283,10 +3304,10 @@ function raas.is_on()
 		else
 			raas.xfer_elec_bus(0)
 		end
-	elseif bus_loaded ~= -1 then
-		dr.plug_bus_load[bus_loaded] = dr.plug_bus_load[bus_loaded] -
+	elseif raas.bus_loaded ~= -1 then
+		dr.plug_bus_load[raas.bus_loaded] = dr.plug_bus_load[raas.bus_loaded] -
 		    raas.const.BUS_LOAD_AMPS
-		bus_loaded = -1
+		raas.bus_loaded = -1
 	end
 
 	return turned_on
@@ -3299,20 +3320,20 @@ function raas.exec()
 	-- Before we start, wait a set delay, because X-Plane's datarefs
 	-- needed for proper init are unstable, so we'll give them an
 	-- extra second to fix themselves
-	if now - raas_start_time < raas.const.STARTUP_DELAY or
-	    now - raas_last_exec_time < raas.const.EXEC_INTVAL or
+	if now - raas.start_time < raas.const.STARTUP_DELAY or
+	    now - raas.last_exec_time < raas.const.EXEC_INTVAL or
 	    not raas.is_on() then
 		return
 	end
-	raas_last_exec_time = now
+	raas.last_exec_time = now
 
 	if dr.ND_alert[0] > 0 and
-	    now - ND_alert_start_time > RAAS_ND_alert_timeout then
+	    now - raas.ND_alert_start_time > RAAS_ND_alert_timeout then
 		if raas.GPWS_has_priority() then
 			-- If GPWS priority has overridden us, keep the
 			-- alert displayed until after the priority
 			-- has been lifted.
-			ND_alert_start_time = now
+			raas.ND_alert_start_time = now
 		else
 			dr.ND_alert[0] = 0
 		end
@@ -3321,32 +3342,33 @@ function raas.exec()
 	raas.load_nearest_airports(nil)
 
 	if dr.rad_alt[0] > raas.const.RADALT_FLARE_THRESH then
-		if not departed then
-			departed = true
-			raas.dbg.log("flt_state", 1, "departed = true")
+		if not raas.departed then
+			raas.departed = true
+			raas.dbg.log("flt_state", 1, "raas.departed = true")
 		end
-		if not arriving then
-			arriving = true
-			raas.dbg.log("flt_state", 1, "arriving = true")
+		if not raas.arriving then
+			raas.arriving = true
+			raas.dbg.log("flt_state", 1, "raas.arriving = true")
 		end
-		if long_landing_ann then
-			raas.dbg.log("ann_state", 1, "long_landing_ann = false")
-			long_landing_ann = false
+		if raas.long_landing_ann then
+			raas.dbg.log("ann_state", 1,
+			    "raas.long_landing_ann = false")
+			raas.long_landing_ann = false
 		end
 	elseif dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH then
-		if departed then
-			raas.dbg.log("flt_state", 1, "landing = true")
-			raas.dbg.log("flt_state", 1, "departed = false")
-			landing = true
+		if raas.departed then
+			raas.dbg.log("flt_state", 1, "raas.landing = true")
+			raas.dbg.log("flt_state", 1, "raas.departed = false")
+			raas.landing = true
 		end
-		departed = false
+		raas.departed = false
 		if dr.gs[0] < raas.const.SPEED_THRESH then
-			arriving = false
+			raas.arriving = false
 		end
 	end
-	if dr.gs[0] < raas.const.SPEED_THRESH and long_landing_ann then
-		raas.dbg.log("ann_state", 1, "long_landing_ann = false")
-		long_landing_ann = false
+	if dr.gs[0] < raas.const.SPEED_THRESH and raas.long_landing_ann then
+		raas.dbg.log("ann_state", 1, "raas.long_landing_ann = false")
+		raas.long_landing_ann = false
 	end
 
 	if RAAS_debug["profile"] ~= nil then
@@ -3363,19 +3385,19 @@ function raas.exec()
 		    collectgarbage("count")))
 	end
 
-	last_elev = dr.elev[0]
-	last_gs = dr.gs[0]
+	raas.last_elev = dr.elev[0]
+	raas.last_gs = dr.gs[0]
 end
 
 function raas.shutdown()
-	if bus_loaded ~= -1 then
-		dr.plug_bus_load[bus_loaded] = dr.plug_bus_load[bus_loaded] -
+	if raas.bus_loaded ~= -1 then
+		dr.plug_bus_load[raas.bus_loaded] = dr.plug_bus_load[raas.bus_loaded] -
 		    raas.const.BUS_LOAD_AMPS
-		bus_loaded = -1
+		raas.bus_loaded = -1
 	end
-	if cur_msg["snd"] ~= nil then
-		stop_sound(cur_msg["snd"])
-		cur_msg = {}
+	if raas.cur_msg["snd"] ~= nil then
+		stop_sound(raas.cur_msg["snd"])
+		raas.cur_msg = {}
 	end
 end
 
@@ -3489,61 +3511,78 @@ end
 
 -- Message priority is one of MSG_PRIO_LOW, MSG_PRIO_MED or MSG_PRIO_HIGH.
 -- These determine how conflicts in message playback resolved between
--- the message passed to play_msg and the one being currently played (cur_msg):
--- 1) if cur_msg is higher priority than the play_msg argument, the play_msg
+-- the message passed to play_msg and the one being currently played (raas.cur_msg):
+-- 1) if raas.cur_msg is higher priority than the play_msg argument, the play_msg
 --	argument is silently dropped
--- 2) if cur_msg and the play_msg argument are equal priority, the play_msg
---	argument is appended to cur_msg and is played immediately following it.
--- 3) if cur_msg is lower priority than the play_msg argument, the cur_msg
+-- 2) if raas.cur_msg and the play_msg argument are equal priority, the play_msg
+--	argument is appended to raas.cur_msg and is played immediately following it.
+-- 3) if raas.cur_msg is lower priority than the play_msg argument, the raas.cur_msg
 --	is immediately stopped and the play_msg argument is played instead.
 function raas.play_msg(msg, prio)
 	assert(prio ~= nil)
 	raas.dbg.log("play_msg", 1, "Playing message" .. table.show(msg) ..
 	    " at priority " .. prio)
-	if not table.isempty(cur_msg) then
-		if cur_msg["prio"] > prio then
+	if not table.isempty(raas.cur_msg) then
+		if raas.cur_msg["prio"] > prio then
 			raas.dbg.log("play_msg", 2, "msg prio " .. prio ..
-			    " lower than cur_msg prio " .. cur_msg["prio"] ..
+			    " lower than raas.cur_msg prio " .. raas.cur_msg["prio"] ..
 			    ", suppressing playback")
 			return
 		end
-		if cur_msg["prio"] < prio then
+		if raas.cur_msg["prio"] < prio then
 			raas.dbg.log("play_msg", 2, "msg prio " .. prio ..
-			    " higher than cur_msg prio " .. cur_msg["prio"] ..
-			    ", stopping cur_msg")
-			if cur_msg["snd"] ~= nil then
-				stop_sound(cur_msg["snd"])
+			    " higher than raas.cur_msg prio " .. raas.cur_msg["prio"] ..
+			    ", stopping raas.cur_msg")
+			if raas.cur_msg["snd"] ~= nil then
+				stop_sound(raas.cur_msg["snd"])
 			end
-			cur_msg = {}
+			raas.cur_msg = {}
 		end
 	end
 
-	if cur_msg["msg"] == nil then
-		raas.dbg.log("play_msg", 2, "no cur_msg, playing from idx 0")
-		cur_msg["msg"] = msg
+	if raas.cur_msg["msg"] == nil then
+		raas.dbg.log("play_msg", 2, "no raas.cur_msg, playing from idx 0")
+		raas.cur_msg["msg"] = msg
 	else
-		raas.dbg.log("play_msg", 2, "cur_msg playing, " ..
+		raas.dbg.log("play_msg", 2, "raas.cur_msg playing, " ..
 		    "appending our message")
 		for i = 1, #msg do
-			cur_msg["msg"][#cur_msg["msg"] + 1] = msg[i]
+			raas.cur_msg["msg"][#raas.cur_msg["msg"] + 1] = msg[i]
 		end
 	end
-	if cur_msg["playing"] == nil then
-		cur_msg["playing"] = 0
+	if raas.cur_msg["playing"] == nil then
+		raas.cur_msg["playing"] = 0
 	end
-	cur_msg["prio"] = prio
+	raas.cur_msg["prio"] = prio
 end
 
-function raas.ND_alert(msg, amber, rwy_ID, dist)
-	if not RAAS_ND_alerts_enabled then
+-- Checks based on aircraft type if we shouldn't display visual ND alerts
+-- Some aircraft (such as the B733) didn't have their avionics retrofitted
+-- to show RAAS visual alerts.
+function raas.ND_alerts_autodisable()
+	if AIRCRAFT_FILENAME:find("B733", 1, true) == 1 then
+		return true
+	end
+	return false
+end
+
+function raas.ND_alert(msg, level, rwy_ID, dist)
+	if not RAAS_ND_alerts_enabled or (not RAAS_ND_alert_overlay_force and
+	    raas.ND_alerts_autodisable()) then
 		return
 	end
 
 	raas.dbg.log("ND_alert", 1, "msg: " .. msg .. " rwy_ID: " ..
-	    tostring(rwy_ID) .. " dist: " .. tostring(dist) .. " amber: " ..
-	    tostring(amber))
+	    tostring(rwy_ID) .. " dist: " .. tostring(dist) .. " caution: " ..
+	    tostring(caution))
 
-	if amber then
+	if level < RAAS_ND_alert_filter then
+		raas.dbg.log("ND_alert", 2, "suppressed due to filter setting")
+		return
+	end
+
+	-- encode any non-routine alerts as amber
+	if level > raas.const.ND_ALERT_ROUTINE then
 		msg = bit.bor(msg, 0x40)
 	end
 
@@ -3575,7 +3614,7 @@ function raas.ND_alert(msg, amber, rwy_ID, dist)
 	end
 
 	dr.ND_alert[0] = msg
-	ND_alert_start_time = os.clock()
+	raas.ND_alert_start_time = os.clock()
 end
 
 function raas.set_sound_on(flag)
@@ -3592,58 +3631,58 @@ end
 
 -- This is the sound scheduling loop.
 function raas.snd_sched()
-	if table.isempty(cur_msg) then
+	if table.isempty(raas.cur_msg) then
 		return
 	end
 
 	-- Make sure our messages are only audible when we're inside
 	-- the cockpit and AC power is on
-	if view_is_ext and (dr.ext_view[0] == 0 or
+	if raas.view_is_ext and (dr.ext_view[0] == 0 or
 	    not RAAS_disable_ext_view) then
 		raas.set_sound_on(true)
-		view_is_ext = false
-	elseif not view_is_ext and dr.ext_view[0] == 1 then
+		raas.view_is_ext = false
+	elseif not raas.view_is_ext and dr.ext_view[0] == 1 then
 		raas.set_sound_on(false)
-		view_is_ext = true
+		raas.view_is_ext = true
 	end
 
 	-- stop audio when GPWS is overriding us - we'll restart the
 	-- annunciation once it's over
-	if raas.GPWS_has_priority() and cur_msg["snd"] ~= nil then
-		stop_sound(cur_msg["snd"])
-		cur_msg["playing"] = 0
+	if raas.GPWS_has_priority() and raas.cur_msg["snd"] ~= nil then
+		stop_sound(raas.cur_msg["snd"])
+		raas.cur_msg["playing"] = 0
 		return
 	end
 
 	-- stop audio when power is down
 	if not raas.is_on() then
-		if cur_msg["snd"] ~= nil then
-			stop_sound(cur_msg["snd"])
+		if raas.cur_msg["snd"] ~= nil then
+			stop_sound(raas.cur_msg["snd"])
 		end
-		cur_msg = {}
+		raas.cur_msg = {}
 		return
 	end
 
 	local now = os.clock()
-	local started = cur_msg["started"]
-	local playing = cur_msg["playing"]
+	local started = raas.cur_msg["started"]
+	local playing = raas.cur_msg["playing"]
 
 	if started == nil or started < now -
-	    messages[cur_msg["msg"][playing]]["dur"] - 0.1 then
+	    messages[raas.cur_msg["msg"][playing]]["dur"] - 0.1 then
 		if playing == nil then
 			playing = 1
 		else
 			playing = playing + 1
 		end
-		if playing > #cur_msg["msg"] then
-			cur_msg = {}
+		if playing > #raas.cur_msg["msg"] then
+			raas.cur_msg = {}
 			return
 		end
 
-		local msg = messages[cur_msg["msg"][playing]]
-		cur_msg["started"] = now
-		cur_msg["playing"] = playing
-		cur_msg["snd"] = msg["snd"]
+		local msg = messages[raas.cur_msg["msg"][playing]]
+		raas.cur_msg["started"] = now
+		raas.cur_msg["playing"] = playing
+		raas.cur_msg["snd"] = msg["snd"]
 		play_sound(msg["snd"])
 	end
 end
@@ -3657,7 +3696,7 @@ function raas.ND_alert_HUD()
 	end
 
 	msg, color = XRAAS_ND_msg_decode(dr_value)
-	if msg == nil or view_is_ext or not raas.is_on() then
+	if msg == nil or raas.view_is_ext or not raas.is_on() then
 		return
 	end
 
@@ -3702,7 +3741,7 @@ function raas.show_init_msg()
 	if not raas.init_msg then
 		return
 	end
-	if os.clock() - raas_start_time > raas.const.INIT_MSG_TIMEOUT then
+	if os.clock() - raas.start_time > raas.const.INIT_MSG_TIMEOUT then
 		raas.init_msg = nil
 		return
 	end
