@@ -2785,7 +2785,6 @@ function raas.gpa_limit(rwy_gpa, dist_from_thr)
 	-- "f1" is the multiplier applied at the "min" distance point
 	-- "f2" is the multiplier applied at the "max" distance point
 	local gpa_factors = {
-	    { ["min"] = 0, ["max"] = 463, ["f1"] = 2, ["f2"] = 2 },
 	    { ["min"] = 463, ["max"] = 926, ["f1"] = 2, ["f2"] = 1.62 },
 	    { ["min"] = 926, ["max"] = 1389, ["f1"] = 1.62, ["f2"] = 1.5 },
 	    { ["min"] = 1389, ["max"] = 2315, ["f1"] = 1.5, ["f2"] = 1.4 },
