@@ -380,7 +380,7 @@ RAAS_accel_stop_distances = {
 }
 
 RAAS_too_high_enabled = true
-local RAAS_gpa_limit_mult = 1.5			-- multiplier
+local RAAS_gpa_limit_mult = 2			-- multiplier
 local RAAS_gpa_limit_max = 8			-- degrees
 
 RAAS_alt_setting_enabled = true
@@ -422,6 +422,9 @@ local air_apch_short_rwy_ann = false
 local air_apch_flap1_ann = {}
 local air_apch_flap2_ann = {}
 local air_apch_flap3_ann = {}
+local air_apch_gpa1_ann = {}
+local air_apch_gpa2_ann = {}
+local air_apch_gpa3_ann = {}
 local on_twy_ann = false
 local long_landing_ann = false
 local short_rwy_takeoff_chk = false
@@ -2767,13 +2770,50 @@ function raas.ground_on_runway_aligned()
 	return on_rwy
 end
 
-function raas.gpa_limit(gpa)
-	assert(gpa ~= nil)
-	return math.min(gpa * RAAS_gpa_limit_mult, RAAS_gpa_limit_max)
+-- Computes the glide path angle limit based on the optimal glide path angle
+-- for the runway (rwy_gpa) and aircraft distance from the runway threshold
+-- (dist_from_thr in meters). Returns the limiting glide path angle in
+-- degrees or 90 if the aircraft is outside of the glide path angle
+-- protection envelope
+function raas.gpa_limit(rwy_gpa, dist_from_thr)
+	assert(rwy_gpa ~= nil)
+	assert(dist_from_thr ~= nil)
+
+	-- These are the linear GPA multiplier segments:
+	-- "min" is the minimum distance from the threshold (in meters)
+	-- "max" is the maximum distance from the threshold (in meters)
+	-- "f1" is the multiplier applied at the "min" distance point
+	-- "f2" is the multiplier applied at the "max" distance point
+	local gpa_factors = {
+	    { ["min"] = 0, ["max"] = 463, ["f1"] = 2, ["f2"] = 2 },
+	    { ["min"] = 463, ["max"] = 926, ["f1"] = 2, ["f2"] = 1.62 },
+	    { ["min"] = 926, ["max"] = 1389, ["f1"] = 1.62, ["f2"] = 1.5 },
+	    { ["min"] = 1389, ["max"] = 2315, ["f1"] = 1.5, ["f2"] = 1.4 },
+	    { ["min"] = 2315, ["max"] = 4167, ["f1"] = 1.4, ["f2"] = 1.33 }
+	}
+
+	-- Select the appropriate range from the gpa_factors table
+	for i, factor in pairs(gpa_factors) do
+		if dist_from_thr >= factor["min"] and
+		    dist_from_thr < factor["max"] then
+			-- Compute the multiplier as a linear interpolation
+			-- between f1 and f2 depending on aircraft relative
+			-- position along factor["min"] and factor["max"]
+			local mult = factor["f1"] +
+			    ((dist_from_thr - factor["min"]) /
+			    (factor["max"] - factor["min"])) *
+			    (factor["f2"] - factor["f1"])
+			return math.min(math.min(RAAS_gpa_limit_mult, mult) *
+			    rwy_gpa, RAAS_gpa_limit_max)
+		end
+	end
+
+	return 90
 end
 
 function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
-    ceil, floor, msg, ann_table, critical, add_pause)
+    ceil, floor, msg, flap_ann_table, gpa_ann_table, critical, add_pause,
+    dist_from_thr, check_gear)
 	assert(arpt_id ~= nil)
 	assert(rwy_id ~= nil)
 	assert(alt ~= nil)
@@ -2783,20 +2823,21 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 	assert(ceil ~= nil)
 	assert(floor ~= nil)
 	assert(msg ~= nil)
-	assert(ann_table ~= nil)
+	assert(flap_ann_table ~= nil)
+	assert(gpa_ann_table ~= nil)
 	assert(critical ~= nil)
 
 	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - last_elev))
 
-	if not ann_table[arpt_id .. rwy_id] and
-	    alt - elev < ceil and alt - elev > floor and
-	    not raas.gear_is_up() and
+	if alt - elev < ceil and alt - elev > floor and
+	    (not raas.gear_is_up() or not check_gear) and
 	    clb_rate < raas.const.GOAROUND_CLB_RATE_THRESH then
 		raas.dbg.log("apch_conf_chk", 2, "check at " .. ceil .. "/" ..
 		    floor)
 		raas.dbg.log("apch_conf_chk", 2, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
-		if dr.flaprqst[0] < RAAS_min_landing_flap then
+		if not flap_ann_table[arpt_id .. rwy_id] and
+		    dr.flaprqst[0] < RAAS_min_landing_flap then
 			raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
 			    "flaprqst = " .. dr.flaprqst[0] ..
 			    " min_flap = " .. RAAS_min_landing_flap)
@@ -2819,12 +2860,15 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 				raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
 				    "flaps ovrd active")
 			end
-			ann_table[arpt_id .. rwy_id] = true
+			flap_ann_table[arpt_id .. rwy_id] = true
 			return true
-		elseif rwy_gpa ~= 0 and not raas.gear_is_up() and
-		    gpa_act > raas.gpa_limit(rwy_gpa) then
+		end
+
+		if not gpa_ann_table[arpt_id .. rwy_id] and rwy_gpa ~= 0 and
+		    gpa_act > raas.gpa_limit(rwy_gpa, dist_from_thr) then
 			raas.dbg.log("apch_conf_chk", 1, "TOO HIGH: " ..
-			    "gpa_limit = " .. raas.gpa_limit(rwy_gpa))
+			    "gpa_limit = " .. raas.gpa_limit(rwy_gpa,
+			    dist_from_thr))
 			if not raas.gpws_terr_ovrd() then
 				if not critical then
 					msg[#msg + 1] = "too_high"
@@ -2844,7 +2888,7 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 				raas.dbg.log("apch_conf_chk", 1,
 				    "TOO HIGH: " .. "terr ovrd active")
 			end
-			ann_table[arpt_id .. rwy_id] = true
+			gpa_ann_table[arpt_id .. rwy_id] = true
 			return true
 		end
 	end
@@ -2894,15 +2938,15 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 		if raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP1_THRESH,
 		    raas.const.RWY_APCH_FLAP2_THRESH, msg, air_apch_flap1_ann,
-		    false, true) or
+		    air_apch_gpa1_ann, false, true, dist, true) or
 		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP2_THRESH,
 		    raas.const.RWY_APCH_FLAP3_THRESH, msg, air_apch_flap2_ann,
-		    false, false) or
+		    air_apch_gpa2_ann, false, false, dist, false) or
 		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP3_THRESH,
 		    raas.const.RWY_APCH_FLAP4_THRESH, msg, air_apch_flap3_ann,
-		    true, false) then
+		    air_apch_gpa3_ann, true, false, dist, false) then
 			msg_prio = raas.const.MSG_PRIO_HIGH
 		end
 
