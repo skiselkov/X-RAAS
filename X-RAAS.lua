@@ -1234,14 +1234,25 @@ function raas.GPWS_has_priority()
 	return dr.gpws_prio[0] ~= 0
 end
 
+function raas.chk_acf_dr(acf_name, dr_name)
+	return AIRCRAFT_FILENAME:find(acf_name, 1, true) == 1 and
+	    dataref_table(dr) ~= nil
+end
+
 -- Checks if the aircraft has a terrain override mode on the GPWS and if it
 -- does, returns true if it GPWS terrain warnings are overridden, otherwise
 -- returns false.
 function raas.gpws_terr_ovrd()
-	if AIRCRAFT_FILENAME:find("757RR", 1, true) == 1 or
-	    AIRCRAFT_FILENAME:find("757PW", 1, true) == 1 then
-		local dr = dataref_table("anim/75/button")
-		return dr[0] == 1
+	if raas.chk_acf_dr("757RR", "anim/75/button") or
+	    raas.chk_acf_dr("757PW", "anim/75/button") then
+		return dataref_table("anim/75/button")[0] == 1
+	elseif raas.chk_acf_dr("777", "anim/51/button") then
+		return dataref_table("anim/51/button")[0] == 1
+	elseif raas.chk_acf_dr("B733", "ixeg/733/misc/egpws_gear_act") then
+		return dataref_table("ixeg/733/misc/egpws_gear_act")[0] == 1
+	elseif raas.chk_acf_dr("FJS_732", "FJS/732/Annun/GPWS_InhibitSwitch")
+	    then
+		return dataref_table("FJS/732/Annun/GPWS_InhibitSwitch")[0] == 1
 	end
 	return false
 end
@@ -1251,14 +1262,13 @@ end
 -- returns false. If the aircraft doesn't have a flaps override GPWS mode,
 -- we attempt to also examine if the aircraft has a terrain override mode.
 function raas.gpws_flaps_ovrd()
-	if AIRCRAFT_FILENAME:find("757RR", 1, true) == 1 or
-	    AIRCRAFT_FILENAME:find("757PW", 1, true) == 1 then
-		local dr = dataref_table("anim/72/button")
-		return dr[0] == 1
-	elseif AIRCRAFT_FILENAME:find("B733", 1, true) == 1 and
-	    PLANE_TAILNUMBER:find("737300", 1, true) == 1 then
-		local dr = dataref_table("ixeg/733/misc/egpws_flap_act")
-		return dr[0] == 1
+	if raas.chk_acf_dr("757RR", "anim/72/button") or
+	    raas.chk_acf_dr("757PW", "anim/72/button") then
+		return dataref_table("anim/72/button")[0] == 1
+	elseif raas.chk_acf_dr("777", "anim/79/button") then
+		return dataref_table("anim/79/button")[0] == 1
+	elseif raas.chk_acf_dr("B733", "ixeg/733/misc/egpws_flap_act") then
+		return dataref_table("ixeg/733/misc/egpws_flap_act")[0] == 1
 	end
 	return raas.gpws_terr_ovrd()
 end
