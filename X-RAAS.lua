@@ -431,6 +431,9 @@ raas.air_apch_flap3_ann = {}
 raas.air_apch_gpa1_ann = {}
 raas.air_apch_gpa2_ann = {}
 raas.air_apch_gpa3_ann = {}
+raas.air_apch_spd1_ann = {}
+raas.air_apch_spd2_ann = {}
+raas.air_apch_spd3_ann = {}
 raas.on_twy_ann = false
 raas.long_landing_ann = false
 raas.short_rwy_takeoff_chk = false
@@ -1160,6 +1163,8 @@ function raas.reset()
 	dr.baro_alt = dataref_table("sim/flightmodel/misc/h_ind")
 	dr.rad_alt = dataref_table("sim/cockpit2/gauges/indicators/" ..
 	    "radio_altimeter_height_ft_pilot")
+	dr.airspeed = dataref_table(
+	    "sim/flightmodel/position/indicated_airspeed")
 	dr.gs = dataref_table("sim/flightmodel/position/groundspeed")
 	dr.lat = dataref_table("sim/flightmodel/position/latitude")
 	dr.lon = dataref_table("sim/flightmodel/position/longitude")
@@ -2823,13 +2828,113 @@ function raas.gpa_limit(rwy_gpa, dist_from_thr)
 	return 90
 end
 
-function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
-    ceil, floor, msg, flap_ann_table, gpa_ann_table, critical, add_pause,
-    dist_from_thr, check_gear)
+-- Gets the landing speed selected in the FMC. This function returns two
+-- values:
+--	*) The landing speed (a number).
+--	*) A boolean indicating if the landing speed return is a reference
+--	   speed (wind margin is NOT taken into account) or an approach
+--	   speed (wind margin IS taken into account). Boeing aircraft tend
+--	   to use Vref, whereas Airbus aircraft tend to use Vapp (V_LS).
+-- The functionality of this depends on the exact aircraft model loaded
+-- and whether it exposes the landing speed to us. If the aircraft doesn't
+-- support exposing the landing speed or the landing speed is not yet
+-- selected in the FMC, this function returns two nil values instead.
+function raas.get_land_spd()
+	if AIRCRAFT_FILENAME:find("777", 1, true) == 1 and
+	    dataref_table("T7Avionics/fms/vref") ~= nil then
+		local val = dataref_table("T7Avionics/fms/vref")[0]
+		if val < 100 then
+			return nil, nil
+		end
+		return val, true
+	end
+	return nil, nil
+end
+
+-- Computes the approach speed limit. The approach speed limit is computed
+-- relative to the landing speed selected in the FMC with an extra added on
+-- top based on our height above the runway threshold:
+-- 1) If the aircraft is outside the approach speed limit protection envelope
+--	(below 300 feet or above 950 feet above runway elevation), this
+--	function returns a very high speed value to guarantee that any
+--	comparison with the actual airspeed will indicate "in range".
+-- 2) If the FMC doesn't expose landing speed information, or the information
+--	has not yet been entered, this function again returns a very high
+--	spped limit value.
+-- 3) If the FMC exposes landing speed information and the information has
+--	been set, the computed margin value is:
+--	a) if the landing speed is based on the reference landing speed (Vref),
+--	   +30 knots between 300 and 500 feet, and between 500 and 950
+--	   increasing linearly from +30 knots at 500 feet to +40 knots at
+--	   950 feet.
+--	b) if the landing speed is based on the approach landing speed (Vapp),
+--	   +15 knots between 300 and 500 feet, and between 500 and 950
+--	   increasing linearly from +15 knots at 500 feet to +40 knots at
+--	   950 feet.
+function raas.apch_spd_limit(height_abv_thr)
+	local spd_factors
+	local spd_margin = 10000
+	local land_spd, spd_is_ref = raas.get_land_spd()
+
+	-- If the landing speed is unknown, just return a huge number so
+	-- we will always be under this speed
+	if land_spd == nil then
+		logMsg("land speed unknown")
+		return 10000
+	end
+
+	if spd_is_ref then
+		-- If the landing speed is a reference speed (Vref), we allow
+		-- up to 30 knots above Vref for approach speed margin when low
+		spd_factors = {
+		    -- "min" and "max" are feet above threshold elevation
+		    -- "f1" and "f2" are indicated airspeed values in knots
+		    { ["min"] = 300, ["max"] = 500,
+			["f1"] = 30, ["f2"] = 30 },
+		    { ["min"] = 500, ["max"] = 950,
+			["f1"] = 30, ["f2"] = 40 },
+		}
+	else
+		-- If the landing speed is an approach speed (Vapp), we use
+		-- a more restrictive speed margin value of 15 knots when low
+		spd_factors = {
+		    { ["min"] = 300, ["max"] = 500,
+			["f1"] = 15, ["f2"] = 15 },
+		    { ["min"] = 500, ["max"] = 950,
+			["f1"] = 15, ["f2"] = 40 },
+		}
+	end
+
+	-- Select the appropriate range from the spd_factors table
+	for i, factor in pairs(spd_factors) do
+		if height_abv_thr >= factor["min"] and
+		    height_abv_thr < factor["max"] then
+			-- Compute the speed limit as a linear interpolation
+			-- between f1 and f2 depending on aircraft relative
+			-- position along factor["min"] and factor["max"]
+			spd_margin = factor["f1"] +
+			    ((height_abv_thr - factor["min"]) /
+			    (factor["max"] - factor["min"])) *
+			    (factor["f2"] - factor["f1"])
+			break
+		end
+	end
+
+	logMsg(string.format("height: %.0f spd_lim: %.0f", height_abv_thr,
+	    land_spd + spd_margin))
+
+	-- If no segment above matched, we don't perform approach speed
+	-- checks, so spd_margin is set to a high value to guarantee we'll
+	-- always fit within limits
+	return land_spd + spd_margin
+end
+
+function raas.apch_config_chk(arpt_id, rwy_id, height_abv_thr, gpa_act,
+    rwy_gpa, ceil, floor, msg, flap_ann_table, gpa_ann_table, spd_ann_table,
+    critical, add_pause, dist_from_thr, check_gear)
 	assert(arpt_id ~= nil)
 	assert(rwy_id ~= nil)
-	assert(alt ~= nil)
-	assert(elev ~= nil)
+	assert(height_abv_thr ~= nil)
 	assert(gpa_act ~= nil)
 	assert(rwy_gpa ~= nil)
 	assert(ceil ~= nil)
@@ -2837,23 +2942,31 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 	assert(msg ~= nil)
 	assert(flap_ann_table ~= nil)
 	assert(gpa_ann_table ~= nil)
+	assert(spd_ann_table ~= nil)
 	assert(critical ~= nil)
+	assert(add_pause ~= nil)
+	assert(dist_from_thr ~= nil)
+	assert(check_gear ~= nil)
 
-	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] - raas.last_elev))
+	local clb_rate = raas.conv_per_min(raas.m2ft(dr.elev[0] -
+	    raas.last_elev))
 
-	if alt - elev < ceil and alt - elev > floor and
+	if height_abv_thr < ceil and height_abv_thr > floor and
 	    (not raas.gear_is_up() or not check_gear) and
 	    clb_rate < raas.const.GOAROUND_CLB_RATE_THRESH then
-		raas.dbg.log("apch_conf_chk", 2, "check at " .. ceil .. "/" ..
-		    floor)
-		raas.dbg.log("apch_conf_chk", 2, "gpa_act = " .. gpa_act ..
+		raas.dbg.log("apch_conf_igchk", 2, "check at " .. ceil ..
+		    "/" .. floor)
+		raas.dbg.log("apch_config_chk", 2, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
 		if not flap_ann_table[arpt_id .. rwy_id] and
 		    dr.flaprqst[0] < RAAS_min_landing_flap then
-			raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
+			raas.dbg.log("apch_config_chk", 1, "FLAPS: " ..
 			    "flaprqst = " .. dr.flaprqst[0] ..
 			    " min_flap = " .. RAAS_min_landing_flap)
-			if not raas.gpws_flaps_ovrd() then
+			if raas.gpws_flaps_ovrd() then
+				raas.dbg.log("apch_config_chk", 1,
+				    "FLAPS: " .. "flaps ovrd active")
+			else
 				if not critical then
 					msg[#msg + 1] = "flaps"
 					if add_pause then
@@ -2869,20 +2982,19 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 					    raas.const.ND_ALERT_UNSTABLE,
 					    raas.const.ND_ALERT_CAUTION)
 				end
-			else
-				raas.dbg.log("apch_conf_chk", 1, "FLAPS: " ..
-				    "flaps ovrd active")
 			end
 			flap_ann_table[arpt_id .. rwy_id] = true
 			return true
-		end
-
-		if not gpa_ann_table[arpt_id .. rwy_id] and rwy_gpa ~= 0 and
+		elseif not gpa_ann_table[arpt_id .. rwy_id] and rwy_gpa ~= 0 and
 		    gpa_act > raas.gpa_limit(rwy_gpa, dist_from_thr) then
-			raas.dbg.log("apch_conf_chk", 1, "TOO HIGH: " ..
-			    "gpa_limit = " .. raas.gpa_limit(rwy_gpa,
+			raas.dbg.log("apch_config_chk", 1, "TOO HIGH: " ..
+			    "gpa_act = " .. gpa_act ..
+			    " gpa_limit=" .. raas.gpa_limit(rwy_gpa,
 			    dist_from_thr))
-			if not raas.gpws_terr_ovrd() then
+			if raas.gpws_terr_ovrd() then
+				raas.dbg.log("apch_config_chk", 1,
+				    "TOO HIGH: " .. "terr ovrd active")
+			else
 				if not critical then
 					msg[#msg + 1] = "too_high"
 					if add_pause then
@@ -2899,11 +3011,40 @@ function raas.apch_config_chk(arpt_id, rwy_id, alt, elev, gpa_act, rwy_gpa,
 					    raas.const.ND_ALERT_UNSTABLE,
 					    raas.const.ND_ALERT_CAUTION)
 				end
-			else
-				raas.dbg.log("apch_conf_chk", 1,
-				    "TOO HIGH: " .. "terr ovrd active")
 			end
 			gpa_ann_table[arpt_id .. rwy_id] = true
+			return true
+		elseif not spd_ann_table[arpt_id .. rwy_id] and
+		    dr.airspeed[0] > raas.apch_spd_limit(height_abv_thr) then
+			raas.dbg.log("apch_config_chk", 1, string.format(
+			    "TOO FAST: airspeed = %.0f apch_spd_limit = %.0f",
+			    dr.airspeed[0], raas.apch_spd_limit(
+			    height_abv_thr)))
+			if raas.gpws_terr_ovrd() then
+				raas.dbg.log("apch_config_chk", 1,
+				    "TOO FAST: " .. "terr ovrd active")
+			elseif raas.gpws_flaps_ovrd() then
+				raas.dbg.log("apch_config_chk", 1,
+				    "TOO FAST: " .. "flaps ovrd active")
+			else
+				if not critical then
+					msg[#msg + 1] = "too_fast"
+					if add_pause then
+						msg[#msg + 1] = "pause"
+					end
+					msg[#msg + 1] = "too_fast"
+					raas.ND_alert(
+					    raas.const.ND_ALERT_TOO_FAST,
+					    raas.const.ND_ALERT_CAUTION)
+				else
+					msg[#msg + 1] = "unstable"
+					msg[#msg + 1] = "unstable"
+					raas.ND_alert(
+					    raas.const.ND_ALERT_UNSTABLE,
+					    raas.const.ND_ALERT_CAUTION)
+				end
+			end
+			spd_ann_table[arpt_id .. rwy_id] = true
 			return true
 		end
 	end
@@ -2950,21 +3091,21 @@ function raas.air_runway_approach_arpt_rwy(arpt, rwy, suffix, pos_v, hdg,
 			gpa_act = 0
 		end
 
-		if raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
+		if raas.apch_config_chk(arpt_id, rwy_id, alt - telev,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP1_THRESH,
 		    raas.const.RWY_APCH_FLAP2_THRESH, msg,
-		    raas.air_apch_flap1_ann, raas.air_apch_gpa1_ann, false,
-		    true, dist, true) or
-		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
+		    raas.air_apch_flap1_ann, raas.air_apch_gpa1_ann,
+		    raas.air_apch_spd1_ann, false, true, dist, true) or
+		    raas.apch_config_chk(arpt_id, rwy_id, alt - telev,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP2_THRESH,
 		    raas.const.RWY_APCH_FLAP3_THRESH, msg,
-		    raas.air_apch_flap2_ann, raas.air_apch_gpa2_ann, false,
-		    false, dist, false) or
-		    raas.apch_config_chk(arpt_id, rwy_id, alt, telev + tch,
+		    raas.air_apch_flap2_ann, raas.air_apch_gpa2_ann,
+		    raas.air_apch_spd2_ann, false, false, dist, false) or
+		    raas.apch_config_chk(arpt_id, rwy_id, alt - telev,
 		    gpa_act, rwy_gpa, raas.const.RWY_APCH_FLAP3_THRESH,
 		    raas.const.RWY_APCH_FLAP4_THRESH, msg,
-		    raas.air_apch_flap3_ann, raas.air_apch_gpa3_ann, true,
-		    false, dist, false) then
+		    raas.air_apch_flap3_ann, raas.air_apch_gpa3_ann,
+		    raas.air_apch_spd3_ann, true, false, dist, false) then
 			msg_prio = raas.const.MSG_PRIO_HIGH
 		end
 
@@ -3029,9 +3170,26 @@ function raas.air_runway_approach_arpt(arpt)
 	local elev = arpt["elev"]
 	if alt > elev + raas.const.RWY_APCH_FLAP1_THRESH or
 	    alt < elev - raas.const.ARPT_APCH_BLW_ELEV_THRESH then
-		raas.reset_airport_approach_table(raas.air_apch_flap1_ann, arpt_id)
-		raas.reset_airport_approach_table(raas.air_apch_flap2_ann, arpt_id)
-		raas.reset_airport_approach_table(raas.air_apch_rwy_ann, arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_flap1_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_flap2_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_flap3_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_gpa1_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_gpa2_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_gpa3_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_spd1_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_spd2_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_spd3_ann,
+		    arpt_id)
+		raas.reset_airport_approach_table(raas.air_apch_rwy_ann,
+		    arpt_id)
 		return 0
 	end
 
