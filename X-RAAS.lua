@@ -333,6 +333,7 @@ raas.const.incompat_acf = {
 RAAS_enabled = true
 RAAS_min_engines = 2				-- count
 RAAS_min_MTOW = 5700				-- kg
+RAAS_allow_helos = false
 RAAS_auto_disable_notify = true
 RAAS_override_electrical = false
 RAAS_speak_units = true
@@ -3930,6 +3931,27 @@ function raas.show_init_msg()
 	end
 end
 
+-- This is to be called ONCE per X-RAAS startup to log an initial startup
+-- message and then exit.
+function raas.log_init_msg(msg)
+	logMsg(msg)
+	if RAAS_auto_disable_notify then
+		raas.init_msg = msg
+		do_every_draw('raas.show_init_msg()')
+	end
+end
+
+-- Check if the aircraft is a helicopter (or at least flies like one).
+function raas.chk_acf_is_helo()
+	for line in io.lines(AIRCRAFT_PATH .. AIRCRAFT_FILENAME) do
+		if line:find("P acf/_fly_like_a_helo", 1, true) == 1 then
+			return (line:find("P acf/_fly_like_a_helo 1", 1,
+			    true) == 1)
+		end
+	end
+	return false
+end
+
 function raas.chk_acf_incompat()
 	for id, acfname in pairs(raas.const.incompat_acf) do
 		if AIRCRAFT_FILENAME:find(acfname, 1, true) ~= nil then
@@ -3978,30 +4000,31 @@ end
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
+elseif raas.chk_acf_is_helo() and not RAAS_allow_helos then
+	raas.log_init_msg(
+	    "X-RAAS: auto-disabled (aircraft is a helicopter).\n" ..
+	    "  If you don't know what this means, refer to the user manual " ..
+	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 3 " ..
+	    "\"Activating X-RAAS in the aircraft\".")
+	return
 elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
-	local msg = "X-RAAS: auto-disabled due to aircraft parameters:\n" ..
+	raas.log_init_msg(
+	    "X-RAAS: auto-disabled due to aircraft parameters:\n" ..
 	    "  Your aircraft: (" .. dr.ICAO[0] .. ") #engines: " ..
 	    dr.num_engines[0] .. "; MTOW: " .. math.floor(dr.mtow[0]) ..
 	    " kg\n" ..
 	    "  X-RAAS configuration: minimum #engines: " .. RAAS_min_engines
 	    .. "; minimum MTOW: " ..RAAS_min_MTOW .. " kg\n" ..
 	    "  If you don't know what this means, refer to the user manual " ..
-	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 2 " ..
-	    "\"Activating X-RAAS in the aircraft\"."
-	logMsg(msg)
-	if RAAS_auto_disable_notify then
-		raas.init_msg = msg
-		do_every_draw('raas.show_init_msg()')
-	end
+	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 3 " ..
+	    "\"Activating X-RAAS in the aircraft\".")
 	return
 elseif raas.chk_acf_incompat() then
-	local msg = "X-RAAS: auto-disabled, incompatible aircraft " ..
-	    "detected."
-	logMsg(msg)
-	if RAAS_auto_disable_notify then
-		raas.init_msg = msg
-		do_every_draw('raas.show_init_msg()')
-	end
+	raas.log_init_msg("X-RAAS: auto-disabled, incompatible aircraft " ..
+	    "detected.\n" ..
+	    "  If you don't know what this means, refer to the user manual " ..
+	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 7.1 " ..
+	    "\"Wholly incompatible aircraft\".")
 	return
 else
 	logMsg("X-RAAS: ENABLED")
