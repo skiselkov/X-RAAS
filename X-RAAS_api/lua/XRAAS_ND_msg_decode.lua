@@ -37,12 +37,12 @@
 -- whatever you have available.
 
 
--- This is the ND message decode function. The dr_value arguments is the int
+-- This is the ND message decode function. The dr_value argument is the int
 -- value of the sim/multiplayer/position/plane19_taxi_light_on dataref.
 -- The function returns two values:
 --   * a string containing the decoded message to be displayed on the ND
 --   * an integer color code (0 for green, 1 for amber)
--- If decoding of dr_value failed, two `nil' values a returned instead.
+-- If decoding of dr_value failed, two `nil' values are returned instead.
 function XRAAS_ND_msg_decode(dr_value)
 	local bit = require 'bit'
 	local msg_type = bit.band(dr_value, 0x3f)
