@@ -1235,25 +1235,32 @@ function raas.GPWS_has_priority()
 	return dr.gpws_prio[0] ~= 0
 end
 
-function raas.chk_acf_dr(acf_name, dr_name)
-	return AIRCRAFT_FILENAME:find(acf_name, 1, true) == 1 and
-	    dataref_table(dr) ~= nil
+function raas.chk_acf_dr(acf_icaos, dr_name)
+	for i, icao in pairs(acf_icaos) do
+		if PLANE_ICAO == icao then
+			return dataref_table(dr_name) ~= nil
+		end
+	end
+	return false
 end
 
 -- Checks if the aircraft has a terrain override mode on the GPWS and if it
 -- does, returns true if it GPWS terrain warnings are overridden, otherwise
 -- returns false.
 function raas.gpws_terr_ovrd()
-	if raas.chk_acf_dr("757RR", "anim/75/button") or
-	    raas.chk_acf_dr("757PW", "anim/75/button") then
+	if raas.chk_acf_dr({"B752", "B753"}, "anim/75/button") then
 		return dataref_table("anim/75/button")[0] == 1
-	elseif raas.chk_acf_dr("777", "anim/51/button") then
+	elseif raas.chk_acf_dr({"B772", "B773", "B77L", "B77W"},
+	    "anim/51/button") then
 		return dataref_table("anim/51/button")[0] == 1
-	elseif raas.chk_acf_dr("B733", "ixeg/733/misc/egpws_gear_act") then
+	elseif raas.chk_acf_dr({"B733"}, "ixeg/733/misc/egpws_gear_act") then
 		return dataref_table("ixeg/733/misc/egpws_gear_act")[0] == 1
-	elseif raas.chk_acf_dr("FJS_732", "FJS/732/Annun/GPWS_InhibitSwitch")
+	elseif raas.chk_acf_dr({"B732"}, "FJS/732/Annun/GPWS_InhibitSwitch")
 	    then
 		return dataref_table("FJS/732/Annun/GPWS_InhibitSwitch")[0] == 1
+	elseif raas.chk_acf_dr({"A332", "A333", "A338", "A339", "A318",
+	    "A319", "A320", "A321"}, "sim/custom/xap/gpws_terr") then
+		return dataref_table("sim/custom/xap/gpws_terr")[0] ~= 0
 	end
 	return false
 end
@@ -1263,13 +1270,16 @@ end
 -- returns false. If the aircraft doesn't have a flaps override GPWS mode,
 -- we attempt to also examine if the aircraft has a terrain override mode.
 function raas.gpws_flaps_ovrd()
-	if raas.chk_acf_dr("757RR", "anim/72/button") or
-	    raas.chk_acf_dr("757PW", "anim/72/button") then
+	if raas.chk_acf_dr({"B752", "B753"}, "anim/72/button") then
 		return dataref_table("anim/72/button")[0] == 1
-	elseif raas.chk_acf_dr("777", "anim/79/button") then
+	elseif raas.chk_acf_dr({"B772", "B773", "B77L", "B77W"},
+	    "anim/79/button") then
 		return dataref_table("anim/79/button")[0] == 1
-	elseif raas.chk_acf_dr("B733", "ixeg/733/misc/egpws_flap_act") then
+	elseif raas.chk_acf_dr({"B733"}, "ixeg/733/misc/egpws_flap_act") then
 		return dataref_table("ixeg/733/misc/egpws_flap_act")[0] == 1
+	elseif raas.chk_acf_dr({"A332", "A333", "A338", "A339", "A318",
+	    "A319", "A320", "A321"}, "sim/custom/xap/gpws_flap") then
+		return dataref_table("sim/custom/xap/gpws_flap")[0] ~= 0
 	end
 	return raas.gpws_terr_ovrd()
 end
@@ -2851,13 +2861,28 @@ end
 -- support exposing the landing speed or the landing speed is not yet
 -- selected in the FMC, this function returns two nil values instead.
 function raas.get_land_spd()
-	if AIRCRAFT_FILENAME:find("777", 1, true) == 1 and
-	    dataref_table("T7Avionics/fms/vref") ~= nil then
+	-- FlightFactor 777
+	if raas.chk_acf_dr({"B772", "B773", "B77L", "B77W"},
+	    "T7Avionics/fms/vref") then
 		local val = dataref_table("T7Avionics/fms/vref")[0]
 		if val < 100 then
 			return nil, nil
 		end
 		return val, true
+	-- JARDesigns A320 & A330
+	elseif raas.chk_acf_dr({"A318", "A319", "A320", "A321",
+	    "A322", "A333", "A338", "A339"}, "sim/custom/xap/pfd/vappr_knots")
+	    then
+		-- First try the Vapp, otherwise fall back to Vref
+		local val = dataref_table("sim/custom/xap/pfd/vappr_knots")[0]
+		if val > 100 then
+			return val, false
+		end
+		val = dataref_table("sim/custom/xap/pfd/vref_knots")[0]
+		if val > 100 then
+			return val, true
+		end
+		return nil, nil
 	end
 	return nil, nil
 end
@@ -2930,9 +2955,6 @@ function raas.apch_spd_limit(height_abv_thr)
 			break
 		end
 	end
-
-	logMsg(string.format("height: %.0f spd_lim: %.0f", height_abv_thr,
-	    land_spd + spd_margin))
 
 	-- If no segment above matched, we don't perform approach speed
 	-- checks, so spd_margin is set to a high value to guarantee we'll
