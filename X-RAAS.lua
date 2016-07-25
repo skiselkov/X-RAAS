@@ -412,8 +412,8 @@ raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRSEP .. ".." .. DIRSEP ..
 local dr = {}
 
 raas.cur_arpts = {}
-raas.start_time = nil
-raas.last_exec_time = nil
+raas.start_time = os.clock()
+raas.last_exec_time = raas.start_time
 raas.last_airport_reload = 0
 raas.ND_alert_start_time = 0
 
@@ -1210,8 +1210,6 @@ function raas.reset()
 	--    "plugin_bus_load_amps")
 	dr.plug_bus_load = {[0] = 0, [1] = 0}
 
-	raas.start_time = os.clock()
-	raas.last_exec_time = raas.start_time
 end
 
 -- Converts an quantity which is calculated per execution cycle of X-RAAS
@@ -3915,16 +3913,25 @@ function raas.load_config(cfgname)
 		if f ~= nil then
 			f()
 		else
-			raas.init_msg = "X-RAAS: syntax error in config " ..
-			    "file: " .. tostring(err)
-			logMsg(raas.init_msg)
+			raas.log_init_msg("X-RAAS startup error: syntax " ..
+			    "error in config file:\n" .. tostring(err) ..
+			    "\nPlease correct this and then hit Plugins " ..
+			    "-> FlyWithLua -> Reload all Lua script files")
+			return false
 		end
 	end
+	return true
 end
 
 function raas.load_configs()
-	raas.load_config(SCRIPT_DIRECTORY .. "X-RAAS.cfg")
-	raas.load_config(AIRCRAFT_PATH .. "X-RAAS.cfg")
+	-- order is important here, first load the global one
+	if not raas.load_config(SCRIPT_DIRECTORY .. "X-RAAS.cfg") then
+		return false
+	end
+	if not raas.load_config(AIRCRAFT_PATH .. "X-RAAS.cfg") then
+		return false
+	end
+	return true
 end
 
 function raas.show_init_msg()
@@ -3991,10 +3998,9 @@ function raas.load_ND_decoder()
 
 	local decoder_f = io.open(fname)
 	if decoder_f == nil then
-		raas.init_msg = "X-RAAS: installation error: " ..
-		    "cannot load file " .. fname
-		logMsg(raas.init_msg)
-		return
+		raas.log_init_msg("X-RAAS: installation error: " ..
+		    "couldn't load file:\n" .. fname)
+		return false
 	end
 	decoder_f:close()
 
@@ -4002,49 +4008,51 @@ function raas.load_ND_decoder()
 	if f ~= nil then
 		f()
 	else
-		raas.init_msg = "X-RAAS: installation error in " ..
-		    "file " .. fname .. ": " .. tostring(err)
-		logMsg(raas.init_msg)
+		raas.log_init_msg("X-RAAS: installation error: " ..
+		    "syntax error in file:\n" .. tostring(err))
+		return false
 	end
+	return true
 end
 
 if RAAS_ND_alerts_enabled and RAAS_ND_alert_overlay_enabled then
-	raas.load_ND_decoder()
+	if not raas.load_ND_decoder() then
+		return
+	end
 end
-raas.load_configs()
-raas.reset()
-
-if raas.init_msg then
-	do_every_draw('raas.show_init_msg()')
+if not raas.load_configs() then
 	return
 end
+raas.reset()
+
+assert(raas.init_msg == nil)
 
 if not RAAS_enabled then
 	logMsg("X-RAAS: DISABLED")
 	return
 elseif raas.chk_acf_is_helo() and not RAAS_allow_helos then
 	raas.log_init_msg(
-	    "X-RAAS: auto-disabled (aircraft is a helicopter).\n" ..
-	    "  If you don't know what this means, refer to the user manual " ..
+	    "X-RAAS: auto-disabled (aircraft is a helicopter).\n\n" ..
+	    "If you don't know what this means, refer to the user manual " ..
 	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 3 " ..
 	    "\"Activating X-RAAS in the aircraft\".")
 	return
 elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
 	raas.log_init_msg(
 	    "X-RAAS: auto-disabled due to aircraft parameters:\n" ..
-	    "  Your aircraft: (" .. dr.ICAO[0] .. ") #engines: " ..
+	    "Your aircraft: (" .. dr.ICAO[0] .. ") #engines: " ..
 	    dr.num_engines[0] .. "; MTOW: " .. math.floor(dr.mtow[0]) ..
 	    " kg\n" ..
-	    "  X-RAAS configuration: minimum #engines: " .. RAAS_min_engines
-	    .. "; minimum MTOW: " ..RAAS_min_MTOW .. " kg\n" ..
-	    "  If you don't know what this means, refer to the user manual " ..
+	    "X-RAAS configuration: minimum #engines: " .. RAAS_min_engines
+	    .. "; minimum MTOW: " ..RAAS_min_MTOW .. " kg\n\n" ..
+	    "If you don't know what this means, refer to the user manual " ..
 	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 3 " ..
 	    "\"Activating X-RAAS in the aircraft\".")
 	return
 elseif raas.chk_acf_incompat() then
 	raas.log_init_msg("X-RAAS: auto-disabled, incompatible aircraft " ..
-	    "detected.\n" ..
-	    "  If you don't know what this means, refer to the user manual " ..
+	    "detected.\n\n" ..
+	    "If you don't know what this means, refer to the user manual " ..
 	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 7.1 " ..
 	    "\"Wholly incompatible aircraft\".")
 	return
