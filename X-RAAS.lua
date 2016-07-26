@@ -227,7 +227,7 @@ raas.const.HDG_ALIGN_THRESH = 25		-- degrees
 raas.const.SPEED_THRESH = 20.5			-- m/s, 40 knots
 raas.const.HIGH_SPEED_THRESH = 30.9		-- m/s, 60 knots
 raas.const.SLOW_ROLL_THRESH = 5.15		-- m/s, 10 knots
-raas.const.STOPPED_THRESH = 1.55		-- m/s, 3 knots
+raas.const.STOPPED_THRESH = 2.06		-- m/s, 4 knots
 raas.const.EARTH_MSL = 6371000			-- meters
 raas.const.RWY_PROXIMITY_LAT_FRACT = 3
 raas.const.RWY_PROXIMITY_LON_DISPL = 609.57	-- meters, 2000 ft
@@ -388,6 +388,7 @@ RAAS_accel_stop_distances = {
 }
 
 RAAS_too_high_enabled = true
+RAAS_too_fast_enabled = true
 RAAS_gpa_limit_mult = 2			-- multiplier
 RAAS_gpa_limit_max = 8			-- degrees
 
@@ -441,6 +442,7 @@ raas.short_rwy_takeoff_chk = false
 raas.on_rwy_timer = -1
 raas.on_rwy_warnings = 0
 raas.off_rwy_ann = false
+raas.rejected_takeoff = nil
 
 raas.accel_stop_max_spd = {}
 raas.accel_stop_ann_initial = 0
@@ -2428,17 +2430,28 @@ function raas.ground_runway_approach()
 	end
 end
 
-function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v, no_flap_check,
+    non_routine)
 	assert(rwy_id ~= nil)
-	assert(pos_v ~= nil)
-	assert(opp_thr_v ~= nil)
+	assert(no_flap_check ~= nil)
+	assert(non_routine ~= nil)
 
 	local msg = {"on_rwy"}
-	local dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
+	local dist
 	local flaprqst = dr.flaprqst[0]
 	local dist_ND = nil
 	local allow_on_rwy_ND_alert = true
 	local level = raas.const.ND_ALERT_ROUTINE
+
+	if non_routine then
+		level = raas.const.ND_ALERT_NONROUTINE
+	end
+
+	if pos_v ~= nil and opp_thr_v ~= nil then
+		dist = raas.vect2.abs(raas.vect2.sub(opp_thr_v, pos_v))
+	else
+		dist = 10000000
+	end
 
 	raas.rwy_id_to_msg(rwy_id, msg)
 	if dist < RAAS_min_takeoff_dist and not raas.landing then
@@ -2454,7 +2467,7 @@ function raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
 
 	if (flaprqst < RAAS_min_takeoff_flap or
 	    flaprqst > RAAS_max_takeoff_flap) and not raas.landing and
-	    not raas.gpws_flaps_ovrd() then
+	    not raas.gpws_flaps_ovrd() and not no_flap_check then
 		msg[#msg + 1] = "flaps"
 		msg[#msg + 1] = "flaps"
 
@@ -2493,14 +2506,15 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 		return
 	end
 
-	if raas.on_rwy_timer ~= -1 and
+	if raas.on_rwy_timer ~= -1 and raas.rejected_takeoff == nil and
 	    ((now - raas.on_rwy_timer > RAAS_on_rwy_warn_initial and
 	    raas.on_rwy_warnings == 0) or
 	    (now - raas.on_rwy_timer - RAAS_on_rwy_warn_initial >
 	    raas.on_rwy_warnings * RAAS_on_rwy_warn_repeat)) and
 	    raas.on_rwy_warnings < RAAS_on_rwy_warn_max_n then
 		raas.on_rwy_warnings = raas.on_rwy_warnings + 1
-		raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+		raas.perform_on_rwy_ann(rwy_id, nil, nil, true, true)
+		raas.perform_on_rwy_ann(rwy_id, nil, nil, true, true)
 	end
 
 	if rhdg > raas.const.HDG_ALIGN_THRESH then
@@ -2509,7 +2523,8 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 
 	if raas.on_rwy_ann[arpt_id .. rwy_id] == nil then
 		if dr.gs[0] < raas.const.SPEED_THRESH then
-			raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v)
+			raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v,
+			    raas.rejected_takeoff, false)
 		end
 		raas.dbg.log("ann_state", 1, "raas.on_rwy_ann[" .. arpt_id ..
 		    rwy_id .. "] = true")
@@ -2700,6 +2715,10 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 		raas.accel_stop_max_spd[arpt_id .. rwy_id] = gs
 		maxspd = gs
 	end
+	if not raas.landing and gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH
+	    then
+		raas.rejected_takeoff = rwy_id
+	end
 	local rpitch = raas.acf_rwy_rel_pitch(te, ote, rwy["len"])
 	-- We want to perform distance remaining callouts if:
 	-- 1) we are NOT landing and speed has decayed below the rejected
@@ -2710,9 +2729,9 @@ function raas.stop_check(arpt_id, rwy, suffix, hdg, pos_v)
 	-- 3) we are NOT landing, distance remaining is below the rotation
 	--    threshold and our pitch angle to the runway indicates that
 	--    rotation has not yet been initiated.
-	if (not raas.landing and gs < maxspd - raas.const.ACCEL_STOP_SPD_THRESH) or
-	    (raas.landing and dist < RAAS_stop_dist_cutoff and
-	    not raas.decel_check(dist)) or
+
+	if raas.rejected_takeoff == rwy_id or (raas.landing and
+	    dist < RAAS_stop_dist_cutoff and not raas.decel_check(dist)) or
 	    (not raas.landing and dist < RAAS_min_rotation_dist and
 	    dr.rad_alt[0] < raas.const.RADALT_GRD_THRESH and
 	    rpitch < RAAS_min_rotation_angle) then
@@ -2751,6 +2770,12 @@ function raas.ground_on_runway_aligned_arpt(arpt)
 				    arpt_id .. rwy["id2"] .. "] = nil")
 				raas.on_rwy_ann[arpt_id .. rwy["id2"]] = nil
 			end
+			if raas.rejected_takeoff == rwy["id1"] or
+			    raas.rejected_takeoff == rwy["id2"] then
+				raas.dbg.log("ann_state", 1,
+				    "raas.rejected_takeoff = nil")
+				raas.rejected_takeoff = nil
+			end
 		end
 		if raas.vect2.in_poly(pos_v, rwy["asda_bbox"]) then
 			raas.stop_check(arpt_id, rwy, "1", hdg, pos_v)
@@ -2786,6 +2811,7 @@ function raas.ground_on_runway_aligned()
 
 	if not on_rwy then
 		raas.short_rwy_takeoff_chk = false
+		raas.rejected_takeoff = nil
 	end
 
 	-- Taxiway takeoff check
@@ -3046,6 +3072,7 @@ function raas.apch_config_chk(arpt_id, rwy_id, height_abv_thr, gpa_act,
 			gpa_ann_table[arpt_id .. rwy_id] = true
 			return true
 		elseif not spd_ann_table[arpt_id .. rwy_id] and
+		    RAAS_too_fast_enabled and
 		    dr.airspeed[0] > raas.apch_spd_limit(height_abv_thr) then
 			raas.dbg.log("apch_config_chk", 1, string.format(
 			    "TOO FAST: airspeed = %.0f apch_spd_limit = %.0f",
