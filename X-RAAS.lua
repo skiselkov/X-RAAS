@@ -52,7 +52,7 @@ RAAS advisories:
 	    Frequency: repeat
 	    Conditions:
 		*) Between 250 and 150 feet AGL
-		*) Not alinged with runway
+		*) Not aligned with runway
 		*) Advisory not available below 150 feet AGL
 
 	4) Unstable approach (flaps)
@@ -110,7 +110,7 @@ RAAS advisories:
 	    Conditions:
 		*) Aircraft on or above last half of runway below 100 feet AGL
 		*) Groundspeed > 40 knots
-		*) Calls supressed during go-around
+		*) Calls suppressed during go-around
 		    +) Above 100 feet AGL
 		    +) Climb rate 300 FPM or greater
 		*) Does not ensure aircraft will or can be stopped before
@@ -124,7 +124,7 @@ RAAS advisories:
 		*) Track aligned within 20 degrees of runway
 		*) Within approximately 200 feet, plus width, of runway
 		   centerline
-		*) Supressed between 520-480 feet AGL, 420-380 feet AGL and
+		*) Suppressed between 520-480 feet AGL, 420-380 feet AGL and
 		   320-300 feet AGL to allow for crew/radio altimeter callouts
 
 	10) Approaching runway on the ground
@@ -493,12 +493,12 @@ end
    References to other tables are shown as values.
    Self references are indicated.
 
-   The string returned is "Lua code", which can be procesed
+   The string returned is "Lua code", which can be processed
    (in the case in which indent is composed by spaces or "--").
    Userdata and function keys and values are shown as strings,
    which logically are exactly not equivalent to the original code.
 
-   This routine can serve for pretty formating tables with
+   This routine can serve for pretty formatting tables with
    proper indentations, apart from printing them:
 
       print(table.show(t, "t"))   -- a typical use
@@ -1145,7 +1145,7 @@ function raas.fpp.fpp2sph(pos, fpp)
 end
 
 -- Returns true if `x' is within the numerical ranges in `rngs', which is an
--- array containings tables of this format:
+-- array containing tables of this format:
 --	{
 --		{["max"] = range_upper_value, ["min"] = range_lower_value},
 --		... <etc> ...
@@ -1204,7 +1204,7 @@ function raas.reset()
 	-- Unfortunately at this moment electrical loading is broken,
 	-- because X-Plane resets plugin_bus_load_amps when the aircraft
 	-- is repositioned, making it impossible for us to track our
-	-- electrical laod appropriately. So it's better to disable it,
+	-- electrical load appropriately. So it's better to disable it,
 	-- than to have it be broken.
 	--dr.plug_bus_load = dataref_table("sim/cockpit2/electrical/" ..
 	--    "plugin_bus_load_amps")
@@ -1282,7 +1282,7 @@ function raas.gpws_flaps_ovrd()
 	return raas.gpws_terr_ovrd()
 end
 
--- Given a runway ID, returns the reciprical runway ID.
+-- Given a runway ID, returns the reciprocal runway ID.
 function raas.recip_rwy_id(rwy_id)
 	assert(rwy_id ~= nil)
 
