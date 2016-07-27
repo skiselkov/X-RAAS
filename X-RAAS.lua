@@ -2524,7 +2524,7 @@ function raas.on_rwy_check(arpt_id, rwy_id, hdg, rwy_hdg, pos_v, opp_thr_v)
 	if raas.on_rwy_ann[arpt_id .. rwy_id] == nil then
 		if dr.gs[0] < raas.const.SPEED_THRESH then
 			raas.perform_on_rwy_ann(rwy_id, pos_v, opp_thr_v,
-			    raas.rejected_takeoff, false)
+			    raas.rejected_takeoff ~= nil, false)
 		end
 		raas.dbg.log("ann_state", 1, "raas.on_rwy_ann[" .. arpt_id ..
 		    rwy_id .. "] = true")
