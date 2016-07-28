@@ -336,6 +336,7 @@ RAAS_min_MTOW = 5700				-- kg
 RAAS_allow_helos = false
 RAAS_auto_disable_notify = true
 RAAS_override_electrical = false
+RAAS_override_replay = false
 RAAS_speak_units = true
 
 RAAS_use_imperial = true
@@ -1202,6 +1203,8 @@ function raas.reset()
 	-- within Lua
 	dr.ND_alert = dataref_table(
 	    "sim/multiplayer/position/plane19_taxi_light_on")
+
+	dr.replay_mode = dataref_table("sim/operation/prefs/replay_mode")
 
 	-- Unfortunately at this moment electrical loading is broken,
 	-- because X-Plane resets plugin_bus_load_amps when the aircraft
@@ -3504,10 +3507,6 @@ end
 
 -- Returns true if X-RAAS has electrical power from the aircraft.
 function raas.is_on()
-	if RAAS_override_electrical then
-		return true
-	end
-
 	local turned_on
 
 	turned_on = ((dr.bus_volt[0] > raas.const.MIN_BUS_VOLT or
@@ -3526,7 +3525,8 @@ function raas.is_on()
 		raas.bus_loaded = -1
 	end
 
-	return turned_on
+	return ((turned_on or RAAS_override_electrical) and
+	    (dr.replay_mode[0] == 0 or RAAS_override_replay))
 end
 
 function raas.exec()
