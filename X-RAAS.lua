@@ -1366,7 +1366,7 @@ end
 function raas.map_apt_dat(apt_dat_fname)
 	assert(apt_dat_fname ~= nil)
 
-	raas.dbg.log("tile", 1, "raas.map_apt_dat(\"" .. apt_dat_fname .. "\")")
+	raas.dbg.log("tile", 2, "raas.map_apt_dat(\"" .. apt_dat_fname .. "\")")
 
 	apt_dat_f = io.open(apt_dat_fname)
 	if apt_dat_f == nil then
@@ -1484,8 +1484,15 @@ end
 -- scenery_packs.ini to determine which scenery packs are currently enabled
 -- and together with the default apt.dat returns them in a list sorted
 -- numerically in preference order (lowest index for highest priority).
-function raas.find_all_apt_dats()
+-- If the as_keys argument is true, the returned list is instead indexed
+-- by the apt.dat file name and the values are the preference order of that
+-- apt.dat (starting from 1 for highest priority and increasing with lowering
+-- priority).
+-- The apt.dat filenames relative to the X-Plane main folder
+-- (raas.const.xpdir), not full filesystem paths.
+function raas.find_all_apt_dats(as_keys)
 	local apt_dats = {}
+	local i = 1
 
 	local scenery_packs_ini = io.open(raas.const.xpdir ..
 	    "Custom Scenery" .. DIRSEP .. "scenery_packs.ini")
@@ -1494,17 +1501,33 @@ function raas.find_all_apt_dats()
 		for line in scenery_packs_ini:lines() do
 			if line:find("SCENERY_PACK ", 1, true) == 1 then
 				local scn_name = line:sub(14)
-				apt_dats[#apt_dats + 1] = raas.const.xpdir ..
-				    scn_name .. DIRSEP .. "Earth nav data" ..
-				    DIRSEP .. "apt.dat"
+				local filename = scn_name ..
+				    "Earth nav data" .. DIRSEP .. "apt.dat"
+				local fp = io.open(raas.const.xpdir ..
+				    filename)
+				if fp ~= nil then
+					fp:close()
+					if as_keys then
+						apt_dats[filename] = i
+						i = i + 1
+					else
+						apt_dats[#apt_dats + 1] =
+						    filename
+					end
+				end
 			end
 		end
 		io.close(scenery_packs_ini)
 	end
 
-	apt_dats[#apt_dats + 1] = raas.const.xpdir .. "Resources" ..
-	    DIRSEP .. "default scenery" .. DIRSEP .. "default apt dat" ..
+	local default_apt_dat_filename = "Resources" .. DIRSEP ..
+	    "default scenery" .. DIRSEP .. "default apt dat" ..
 	    DIRSEP .. "Earth nav data" .. DIRSEP .. "apt.dat"
+	if as_keys then
+		apt_dats[default_apt_dat_filename] = i
+	else
+		apt_dats[#apt_dats + 1] = default_apt_dat_filename
+	end
 
 	return apt_dats
 end
@@ -1705,28 +1728,193 @@ function raas.write_apt_dat(icao, arpt)
 	fp:close()
 end
 
+-- Returns the file size of an apt.dat. The passed path must be relative
+-- to the main X-Plane directory.
+function raas.get_apt_dat_size(apt_dat)
+	local fp = io.open(raas.const.xpdir .. apt_dat)
+	if fp == nil then
+		return nil
+	end
+	local sz = fp:seek("end")
+	fp:close()
+	return sz
+end
+
+-- Returns the AIRAC cycle number of the currently installed AIRAC database.
+-- Returns `nil' if the AIRAC cycle is unknown.
+function raas.get_airac_cycle()
+	-- We first try the Custom Data version, as that's more up to date
+	local filename = raas.const.xpdir .. "Custom Data" .. DIRSEP ..
+	    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
+	local fp = io.open(filename)
+
+	if fp == nil then
+		-- Try the Airports.txt shipped with X-Plane.
+		filename = raas.const.xpdir .. "Resources" .. DIRSEP ..
+		    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
+		fp = io.open(filename)
+		if fp == nil then
+			logMsg("X-RAAS: missing Airports.txt, please check " ..
+			    "your navdata and recreate the cache")
+			return nil
+		end
+	end
+
+	local first_line = fp:read("*line")
+	if first_line == nil then
+		logMsg("X-RAAS: truncated Airports.txt, please check " ..
+		    "your navdata and recreate the cache")
+		return nil
+	end
+
+	fp:close()
+	local line_comps = first_line:split(",")
+	if #line_comps < 5 or line_comps[1] ~= "X" then
+		logMsg("X-RAAS: malformed first line in Airports.txt, " ..
+		    "please check your navdata and recreate the cache")
+		return nil
+	end
+
+	return tonumber(line_comps[2])
+end
+
+-- Checks if the airport data cache is up to date. We check the apt_dats
+-- list to see if it is exactly the same as the airport sceneries that
+-- are installed in the simulator and we also compare AIRAC cycles. We
+-- perform one additional check for the default apt.dat file - we check
+-- its file size to see if it has changed. We can't check any other apt.dat
+-- files, as that takes too long.
+-- Returns true If the cache is up to date, otherwise returns false.
+function raas.apt_dat_cache_up_to_date()
+	-- We check if our apt_dats list corresponds with the installed
+	-- sceneries. Additions or removals are detected and the cache
+	-- recreated. We also check the size of the default scenery apt.dat
+	-- to see if it's changed.
+	-- Finally, we check our airac cycle, as updates can cause the
+	-- cache to become outdated.
+	local filename = SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache" ..
+	    DIRSEP .. "apt_dats"
+	local fp = io.open(filename)
+
+	if fp == nil then
+		raas.dbg.log("tile", 1, "no apt_dats file in cache")
+		return false
+	end
+
+	local cached_apt_dats = {}
+	local real_apt_dats = raas.find_all_apt_dats(true)
+	assert(real_apt_dats ~= nil)
+
+	for line in fp:lines() do
+		local space = line:find(" ", 1, true)
+		if space == nil then
+			break
+		end
+		cached_apt_dats[line:sub(space + 1)] =
+		    tonumber(line:sub(1, space - 1))
+	end
+
+	for apt_dat, x in pairs(cached_apt_dats) do
+		if real_apt_dats[apt_dat] == nil then
+			raas.dbg.log("tile", 1, "removed apt_dat: " .. apt_dat)
+			return false
+		end
+		-- Check the file size of the default apt dat, since that
+		-- can change between X-Plane updates and changes A LOT of
+		-- runway locations.
+		-- Unfortunately, we can't check every apt.dat, since it's
+		-- rather slow.
+		if apt_dat:find("default apt dat", 1, true) ~= nil then
+			if raas.get_apt_dat_size(apt_dat) ~=
+			    cached_apt_dats[apt_dat] then
+				raas.dbg.log("tile", 1,
+				    "change in size of apt_dat: " .. apt_dat)
+				return false
+			end
+		end
+	end
+
+	for apt_dat, x in pairs(real_apt_dats) do
+		if cached_apt_dats[apt_dat] == nil then
+			raas.dbg.log("tile", 1, "new apt_dat: " .. apt_dat)
+			return false
+		end
+	end
+
+	filename = SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache" ..
+	    DIRSEP .. "airac_cycle"
+	fp = io.open(filename)
+	if fp == nil then
+		raas.dbg.log("tile", 1, "missing airac_cycle file in cache")
+		return false
+	end
+	local cached_airac_cycle = tonumber(fp:read("*all"))
+	fp:close()
+	local cur_airac_cycle = raas.get_airac_cycle()
+
+	if cached_airac_cycle ~= cur_airac_cycle then
+		raas.dbg.log("tile", 1, "AIRAC cycle changed")
+		return false
+	end
+
+	return true
+end
+
+-- Writes a new apt_dats file into the airport data cache. Each line
+-- in the file consists of two fields:
+-- *) a file size, followed by a space
+-- *) the apt.dat filename (relative to the X-Plane root directory)
+function raas.write_apt_dats_file()
+	local filename = SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache" ..
+	    DIRSEP .. "apt_dats"
+	local apt_dats_fp = io.open(filename, "w")
+	local apt_dats = raas.find_all_apt_dats(false)
+
+	for i, apt_dat in pairs(apt_dats) do
+		local sz = raas.get_apt_dat_size(apt_dat)
+		apt_dats_fp:write(tostring(sz) .. " " .. apt_dat .. "\n")
+	end
+
+	apt_dats_fp:close()
+end
+
+-- Writes a new airac_cycle file into the airport data cache. This is
+-- just a simple number of the currently active AIRAC cycle.
+function raas.write_airac_cycle_file()
+	local filename = SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache" ..
+	    DIRSEP .. "airac_cycle"
+	local fp = io.open(filename, "w")
+	fp:write(tostring(raas.get_airac_cycle()))
+	fp:close()
+end
+
 -- Takes the current state of the raas.apt_dat table and writes all the airports
 -- in it to the X-RAAS_apt_dat.cache so that a subsequent run of X-RAAS can
 -- pick this info up.
 function raas.recreate_apt_dat_cache()
 	local version_filename = SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache" ..
 	    DIRSEP .. "version"
+	local version = nil
 	local version_file = io.open(version_filename)
+
 	if version_file ~= nil then
-		local version = tonumber(version_file:read("*all"))
+		version = tonumber(version_file:read("*all"))
 		version_file:close()
-		if version == raas.const.XRAAS_apt_dat_cache_version then
-			-- cache version current, no need to rebuild it
-			return
-		end
 	end
 
-	local apt_dat_files = raas.find_all_apt_dats()
+	if version == raas.const.XRAAS_apt_dat_cache_version and
+	    raas.apt_dat_cache_up_to_date() then
+		-- cache version current, no need to rebuild it
+		raas.dbg.log("tile", 1, "X-RAAS_apt_dat_cache up to date")
+		return
+	end
+
+	local apt_dat_files = raas.find_all_apt_dats(false)
 	assert(apt_dat_files ~= nil)
 
 	-- First scan all the provided apt.dat files
 	for i = 1, #apt_dat_files do
-		raas.map_apt_dat(apt_dat_files[i])
+		raas.map_apt_dat(raas.const.xpdir .. apt_dat_files[i])
 	end
 	for icao, arpt in pairs(raas.apt_dat) do
 		if table.isempty(arpt["rwys"]) then
@@ -1740,6 +1928,9 @@ function raas.recreate_apt_dat_cache()
 	version_file = io.open(version_filename, "w")
 	version_file:write(tostring(raas.const.XRAAS_apt_dat_cache_version))
 	version_file:close()
+
+	raas.write_apt_dats_file()
+	raas.write_airac_cycle_file()
 
 	local dirs = {}
 	local dir_set = {}
