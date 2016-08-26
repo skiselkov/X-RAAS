@@ -414,7 +414,7 @@ raas.const.xpdir = SCRIPT_DIRECTORY .. ".." .. DIRSEP .. ".." .. DIRSEP ..
 local dr = {}
 
 raas.cur_arpts = {}
-raas.start_time = os.clock()
+raas.start_time = dataref_table("sim/time/total_running_time_sec")[0]
 raas.last_exec_time = raas.start_time
 raas.last_airport_reload = 0
 raas.ND_alert_start_time = 0
@@ -1163,7 +1163,15 @@ function raas.number_in_rngs(x, rngs)
 	return false
 end
 
+-- Returns the current time as fractional seconds. We used to use os.clock(),
+-- but X-Plane 10.50 blew FlyWithLua up and caused it slow down to half clock
+-- speed. Plus os.clock() was never meant to be very unreliable anyway.
+function raas.time()
+	return dr.time[0]
+end
+
 function raas.reset()
+	dr.time = dataref_table("sim/time/total_running_time_sec")
 	dr.baro_alt = dataref_table("sim/flightmodel/misc/h_ind")
 	dr.rad_alt = dataref_table("sim/cockpit2/gauges/indicators/" ..
 	    "radio_altimeter_height_ft_pilot")
@@ -2462,7 +2470,7 @@ function raas.dist_to_msg(dist, msg, div_by_100)
 		end
 	end
 
-	local now = os.clock()
+	local now = raas.time()
 
 	if now - raas.last_units_call > raas.const.UNITS_APPEND_INTVAL and
 	    RAAS_speak_units then
@@ -3133,7 +3141,6 @@ function raas.apch_spd_limit(height_abv_thr)
 	-- If the landing speed is unknown, just return a huge number so
 	-- we will always be under this speed
 	if land_spd == nil then
-		logMsg("land speed unknown")
 		return 10000
 	end
 
@@ -3721,7 +3728,7 @@ function raas.is_on()
 end
 
 function raas.exec()
-	local now = os.clock()
+	local now = raas.time()
 	local time_s, time_e
 
 	-- Before we start, wait a set delay, because X-Plane's datarefs
@@ -3779,14 +3786,14 @@ function raas.exec()
 	end
 
 	if RAAS_debug["profile"] ~= nil then
-		time_s = os.clock()
+		time_s = raas.time()
 	end
 	raas.ground_runway_approach()
 	raas.ground_on_runway_aligned()
 	raas.air_runway_approach()
 	raas.altimeter_setting()
 	if RAAS_debug["profile"] ~= nil then
-		time_e = os.clock()
+		time_e = raas.time()
 		raas.dbg.log("profile", 1, string.format("raas.exec: " ..
 		    "%.03f ms [Lua: %d kB]", ((time_e - time_s) * 1000),
 		    collectgarbage("count")))
@@ -4021,7 +4028,7 @@ function raas.ND_alert(msg, level, rwy_ID, dist)
 	end
 
 	dr.ND_alert[0] = msg
-	raas.ND_alert_start_time = os.clock()
+	raas.ND_alert_start_time = raas.time()
 end
 
 function raas.set_sound_on(flag)
@@ -4070,7 +4077,7 @@ function raas.snd_sched()
 		return
 	end
 
-	local now = os.clock()
+	local now = raas.time()
 	local started = raas.cur_msg["started"]
 	local playing = raas.cur_msg["playing"]
 
@@ -4157,7 +4164,7 @@ function raas.show_init_msg()
 	if not raas.init_msg then
 		return
 	end
-	if os.clock() - raas.start_time > raas.const.INIT_MSG_TIMEOUT then
+	if os.time() - raas.start_time > raas.const.INIT_MSG_TIMEOUT then
 		raas.init_msg = nil
 		return
 	end
@@ -4206,6 +4213,13 @@ function raas.chk_acf_incompat()
 		end
 	end
 	return false
+end
+
+function raas.chk_lua_outdated()
+	-- Unfortunately, FlyWithLua doesn't have a version variable, so
+	-- we use the presence of certain functions to determine its version.
+	-- do_on_exit was introduced in 2.4.1
+	return do_on_exit == nil
 end
 
 -- This loads our ND message decoder. This serves both to test the code and
@@ -4274,6 +4288,12 @@ elseif raas.chk_acf_incompat() then
 	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 7.1 " ..
 	    "\"Wholly incompatible aircraft\".")
 	return
+elseif raas.chk_lua_outdated() then
+	raas.log_init_msg("X-RAAS: auto-disabled, your version of " ..
+	    "FlyWithLua is out of date.\n\n" ..
+	    "Refer to the X-RAAS user manual in X-RAAS_docs" .. DIRSEP ..
+	    "manual.pdf, Section 2 \"Installation\".")
+	return
 else
 	logMsg("X-RAAS: ENABLED")
 end
@@ -4288,12 +4308,9 @@ if RAAS_ND_alerts_enabled and RAAS_ND_alert_overlay_enabled then
 	do_every_draw('raas.ND_alert_HUD()')
 end
 
--- FlyWithLua prior to 2.4.1 didn't have do_on_exit
-if do_on_exit ~= nil then
-	do_on_exit('raas.shutdown()')
-end
+do_on_exit('raas.shutdown()')
 
--- Uncomment the line below to get a nice debug display
+-- Set RAAS_debug_graphical=true in the config file to get a debug overlay
 if RAAS_debug_graphical then
 	do_every_draw('raas.dbg.draw()')
 end
