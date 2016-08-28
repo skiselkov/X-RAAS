@@ -222,6 +222,7 @@ if SYSTEM == "IBM" then
 else
 	DIRSEP = "/"
 end
+raas.const.VERSION = "1.0.1"
 raas.const.EXEC_INTVAL = 0.5			-- seconds
 raas.const.HDG_ALIGN_THRESH = 25		-- degrees
 raas.const.SPEED_THRESH = 20.5			-- m/s, 40 knots
@@ -237,7 +238,8 @@ raas.const.RADALT_GRD_THRESH = 5		-- feet
 raas.const.RADALT_FLARE_THRESH = 100		-- feet
 raas.const.RADALT_DEPART_THRESH = 100		-- feet
 raas.const.STARTUP_DELAY = 3			-- seconds
-raas.const.INIT_MSG_TIMEOUT = 25		-- seconds
+raas.const.STARTUP_MSG_TIMEOUT = 4		-- seconds
+raas.const.INIT_ERR_MSG_TIMEOUT = 25		-- seconds
 raas.const.ARPT_RELOAD_INTVAL = 10		-- seconds
 raas.const.ARPT_LOAD_LIMIT = 8 * 1852		-- meters, 8nm distance
 raas.const.ACCEL_STOP_SPD_THRESH = 2.6		-- m/s, 5 knots
@@ -335,6 +337,7 @@ RAAS_min_engines = 2				-- count
 RAAS_min_MTOW = 5700				-- kg
 RAAS_allow_helos = false
 RAAS_auto_disable_notify = true
+RAAS_startup_notify = true
 RAAS_override_electrical = false
 RAAS_override_replay = false
 RAAS_speak_units = true
@@ -479,12 +482,13 @@ raas.last_units_call = 0
 -- or equal to `level' and if yes, prints "RAAS_debug[<category>]: <msg>"
 function raas.dbg.log(category, level, msg)
 	if RAAS_debug[category] ~= nil and RAAS_debug[category] >= level then
-		logMsg("RAAS_debug[" .. category .. "]: " .. msg)
+		logMsg("RAAS_debug(" .. raas.const.VERSION .. ")[" ..
+		    category .. "]: " .. msg)
 	end
 end
 
 --[[
-   Author: Julio ]Manuel Fernandez-Diaz
+   Author: Julio Manuel Fernandez-Diaz
    Date:   January 12, 2007
    (For Lua 5.1)
 
@@ -1170,8 +1174,14 @@ function raas.time()
 	return dr.time[0]
 end
 
+function raas.man_ref(section_number, section_name)
+	return "For more information, please refer to the X-RAAS user " ..
+	    "manual in X-RAAS_docs" .. DIRSEP ..
+	    "manual.pdf, section " .. tostring(section_number) .. " \"" ..
+	    section_name .. "\"."
+end
+
 function raas.reset()
-	dr.time = dataref_table("sim/time/total_running_time_sec")
 	dr.baro_alt = dataref_table("sim/flightmodel/misc/h_ind")
 	dr.rad_alt = dataref_table("sim/cockpit2/gauges/indicators/" ..
 	    "radio_altimeter_height_ft_pilot")
@@ -1223,6 +1233,18 @@ function raas.reset()
 	--    "plugin_bus_load_amps")
 	dr.plug_bus_load = {[0] = 0, [1] = 0}
 
+end
+
+function raas.startup_complete()
+	local units
+	if RAAS_use_imperial then
+		units = "Feet"
+	else
+		units = "Meters"
+	end
+	raas.log_init_msg("X-RAAS(" .. raas.const.VERSION ..
+	    "): Runway Awareness OK; " .. units .. ".", RAAS_startup_notify,
+	    raas.const.STARTUP_MSG_TIMEOUT)
 end
 
 -- Converts an quantity which is calculated per execution cycle of X-RAAS
@@ -1557,9 +1579,12 @@ function raas.load_airports_txt()
 		    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
 		fp = io.open(airports_fname)
 		if fp == nil then
-			logMsg("X-RAAS: missing Airports.txt, please check " ..
-			    "your navdata and recreate the cache")
-			return
+			raas.log_init_msg("X-RAAS navdata error: your " ..
+			    "Airports.txt is missing or unreadable. " ..
+			    "Please correct this and recreate the cache.",
+			    true, raas.const.INIT_ERR_MSG_TIMEOUT,
+			    2, "Installation")
+			return false
 		end
 	end
 
@@ -1605,6 +1630,7 @@ function raas.load_airports_txt()
 	end
 
 	fp:close()
+	return true
 end
 
 function raas.os_is_unix()
@@ -1762,24 +1788,31 @@ function raas.get_airac_cycle()
 		    "GNS430" .. DIRSEP .. "navdata" .. DIRSEP .. "Airports.txt"
 		fp = io.open(filename)
 		if fp == nil then
-			logMsg("X-RAAS: missing Airports.txt, please check " ..
-			    "your navdata and recreate the cache")
+			raas.log_init_msg("X-RAAS navdata error: your " ..
+			    "Airports.txt is missing or unreadable. " ..
+			    "Please correct this and recreate the cache.",
+			    true, raas.const.INIT_ERR_MSG_TIMEOUT,
+			    2, "Installation")
 			return nil
 		end
 	end
 
 	local first_line = fp:read("*line")
 	if first_line == nil then
-		logMsg("X-RAAS: truncated Airports.txt, please check " ..
-		    "your navdata and recreate the cache")
+		raas.log_init_msg(
+		    "X-RAAS navdata error: your Airports.txt is empty. " ..
+		    "Please correct this and recreate the cache.", true,
+		    raas.const.INIT_ERR_MSG_TIMEOUT, 2, "Installation")
 		return nil
 	end
 
 	fp:close()
 	local line_comps = first_line:split(",")
 	if #line_comps < 5 or line_comps[1] ~= "X" then
-		logMsg("X-RAAS: malformed first line in Airports.txt, " ..
-		    "please check your navdata and recreate the cache")
+		raas.log_init_msg(
+		    "X-RAAS navdata error: your Airports.txt is malformed. " ..
+		    "Please correct this and recreate the cache.", true,
+		    raas.const.INIT_ERR_MSG_TIMEOUT, 2, "Installation")
 		return nil
 	end
 
@@ -1860,6 +1893,10 @@ function raas.apt_dat_cache_up_to_date()
 	fp:close()
 	local cur_airac_cycle = raas.get_airac_cycle()
 
+	if cur_airac_cycle == nil then
+		return nil
+	end
+
 	if cached_airac_cycle ~= cur_airac_cycle then
 		raas.dbg.log("tile", 1, "AIRAC cycle changed")
 		return false
@@ -1910,12 +1947,20 @@ function raas.recreate_apt_dat_cache()
 		version_file:close()
 	end
 
-	if version == raas.const.XRAAS_apt_dat_cache_version and
-	    raas.apt_dat_cache_up_to_date() then
-		-- cache version current, no need to rebuild it
-		raas.dbg.log("tile", 1, "X-RAAS_apt_dat_cache up to date")
-		return
+	if version == raas.const.XRAAS_apt_dat_cache_version then
+		local uptodate = raas.apt_dat_cache_up_to_date()
+		if uptodate == nil then
+			logMsg("read error")
+			return false
+		end
+		if uptodate then
+			-- cache version current, no need to rebuild it
+			raas.dbg.log("tile", 1,
+			    "X-RAAS_apt_dat_cache up to date")
+			return true
+		end
 	end
+	raas.dbg.log("tile", 1, "X-RAAS_apt_dat_cache out of date")
 
 	local apt_dat_files = raas.find_all_apt_dats(false)
 	assert(apt_dat_files ~= nil)
@@ -1929,7 +1974,9 @@ function raas.recreate_apt_dat_cache()
 			raas.apt_dat[icao] = nil
 		end
 	end
-	raas.load_airports_txt()
+	if not raas.load_airports_txt() then
+		return false
+	end
 
 	raas.remove_directory(SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache")
 	raas.create_directories({SCRIPT_DIRECTORY .. "X-RAAS_apt_dat_cache"})
@@ -1962,12 +2009,8 @@ function raas.recreate_apt_dat_cache()
 	end
 
 	raas.apt_dat = {}
-end
 
--- Scans the cached copy of X-RAAS_apt_dat.cache and if it doesn't exist,
--- recreates the cache from raw X-Plane navigational and scenery data.
-function raas.map_apt_dats()
-	raas.recreate_apt_dat_cache()
+	return true
 end
 
 --[[
@@ -3212,7 +3255,7 @@ function raas.apch_config_chk(arpt_id, rwy_id, height_abv_thr, gpa_act,
 	if height_abv_thr < ceil and height_abv_thr > floor and
 	    (not raas.gear_is_up() or not check_gear) and
 	    clb_rate < raas.const.GOAROUND_CLB_RATE_THRESH then
-		raas.dbg.log("apch_conf_igchk", 2, "check at " .. ceil ..
+		raas.dbg.log("apch_config_chk", 2, "check at " .. ceil ..
 		    "/" .. floor)
 		raas.dbg.log("apch_config_chk", 2, "gpa_act = " .. gpa_act ..
 		    " rwy_gpa = " .. rwy_gpa)
@@ -3735,11 +3778,14 @@ function raas.exec()
 	-- needed for proper init are unstable, so we'll give them an
 	-- extra second to fix themselves
 	if now - raas.start_time < raas.const.STARTUP_DELAY or
-	    now - raas.last_exec_time < raas.const.EXEC_INTVAL or
-	    not raas.is_on() then
+	    now - raas.last_exec_time < raas.const.EXEC_INTVAL then
 		return
 	end
 	raas.last_exec_time = now
+	if not raas.is_on() then
+		raas.dbg.log("power_state", 1, "is_on = false")
+		return
+	end
 
 	if dr.ND_alert[0] > 0 and
 	    now - raas.ND_alert_start_time > RAAS_ND_alert_timeout then
@@ -3955,7 +4001,8 @@ function raas.play_msg(msg, prio)
 	end
 
 	if raas.cur_msg["msg"] == nil then
-		raas.dbg.log("play_msg", 2, "no raas.cur_msg, playing from idx 0")
+		raas.dbg.log("play_msg", 2,
+		    "no raas.cur_msg, playing from idx 0")
 		raas.cur_msg["msg"] = msg
 	else
 		raas.dbg.log("play_msg", 2, "raas.cur_msg playing, " ..
@@ -4141,7 +4188,9 @@ function raas.load_config(cfgname)
 			raas.log_init_msg("X-RAAS startup error: syntax " ..
 			    "error in config file:\n" .. tostring(err) ..
 			    "\nPlease correct this and then hit Plugins " ..
-			    "-> FlyWithLua -> Reload all Lua script files")
+			    "-> FlyWithLua -> Reload all Lua script files.",
+			    true, raas.const.INIT_ERR_MSG_TIMEOUT,
+			    5, "Configuration")
 			return false
 		end
 	end
@@ -4161,10 +4210,11 @@ end
 
 function raas.show_init_msg()
 	local graphics = require 'graphics'
-	if not raas.init_msg then
+	if raas.init_msg == nil then
 		return
 	end
-	if os.time() - raas.start_time > raas.const.INIT_MSG_TIMEOUT then
+	assert(raas.init_msg_timeout ~= nil)
+	if raas.time() - raas.start_time > raas.init_msg_timeout then
 		raas.init_msg = nil
 		return
 	end
@@ -4187,10 +4237,21 @@ end
 
 -- This is to be called ONCE per X-RAAS startup to log an initial startup
 -- message and then exit.
-function raas.log_init_msg(msg)
+function raas.log_init_msg(msg, display, timeout, man_sect_number,
+    man_sect_name)
+	assert(msg ~= nil)
+	assert(display ~= nil)
+	assert(timeout ~= nil)
+	if man_sect_number ~= nil and man_sect_name ~= nil then
+		msg = msg .. "\n" ..
+		    raas.man_ref(man_sect_number, man_sect_name)
+	else
+		msg = msg
+	end
 	logMsg(msg)
-	if RAAS_auto_disable_notify then
+	if display then
 		raas.init_msg = msg
+		raas.init_msg_timeout = timeout
 		do_every_draw('raas.show_init_msg()')
 	end
 end
@@ -4231,7 +4292,9 @@ function raas.load_ND_decoder()
 	local decoder_f = io.open(fname)
 	if decoder_f == nil then
 		raas.log_init_msg("X-RAAS: installation error: " ..
-		    "couldn't load file:\n" .. fname)
+		    "couldn't load required file:\n" .. fname ..
+		    "\nPlease reinstall X-RAAS.", true,
+		    raas.const.INIT_ERR_MSG_TIMEOUT, 2, "Installation")
 		return false
 	end
 	decoder_f:close()
@@ -4241,11 +4304,17 @@ function raas.load_ND_decoder()
 		f()
 	else
 		raas.log_init_msg("X-RAAS: installation error: " ..
-		    "syntax error in file:\n" .. tostring(err))
+		    "syntax error in core file:\n" .. tostring(err) ..
+		    "\nPlease reinstall X-RAAS.", true,
+		    raas.const.INIT_ERR_MSG_TIMEOUT, 2, "Installation")
 		return false
 	end
 	return true
 end
+
+-- This needs to go as the very first thing we do, because log_init_msg
+-- depends on it.
+dr.time = dataref_table("sim/time/total_running_time_sec")
 
 if RAAS_ND_alerts_enabled and RAAS_ND_alert_overlay_enabled then
 	if not raas.load_ND_decoder() then
@@ -4255,6 +4324,7 @@ end
 if not raas.load_configs() then
 	return
 end
+
 raas.reset()
 
 assert(raas.init_msg == nil)
@@ -4264,42 +4334,41 @@ if not RAAS_enabled then
 	return
 elseif raas.chk_acf_is_helo() and not RAAS_allow_helos then
 	raas.log_init_msg(
-	    "X-RAAS: auto-disabled (aircraft is a helicopter).\n\n" ..
-	    "If you don't know what this means, refer to the user manual " ..
-	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 3 " ..
-	    "\"Activating X-RAAS in the aircraft\".")
+	    "X-RAAS: auto-disabled: aircraft is a helicopter.",
+	    RAAS_auto_disable_notify, raas.const.INIT_ERR_MSG_TIMEOUT,
+	    3, "Activating X-RAAS in the aircraft")
 	return
 elseif dr.num_engines[0] < RAAS_min_engines or dr.mtow[0] < RAAS_min_MTOW then
 	raas.log_init_msg(
-	    "X-RAAS: auto-disabled due to aircraft parameters:\n" ..
-	    "Your aircraft: (" .. dr.ICAO[0] .. ") #engines: " ..
-	    dr.num_engines[0] .. "; MTOW: " .. math.floor(dr.mtow[0]) ..
+	    "X-RAAS: auto-disabled: aircraft below X-RAAS limits:\n" ..
+	    "X-RAAS configuration: minimum number of engines: " ..
+	    RAAS_min_engines .. "; minimum MTOW: " ..RAAS_min_MTOW ..
 	    " kg\n" ..
-	    "X-RAAS configuration: minimum #engines: " .. RAAS_min_engines
-	    .. "; minimum MTOW: " ..RAAS_min_MTOW .. " kg\n\n" ..
-	    "If you don't know what this means, refer to the user manual " ..
-	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 3 " ..
-	    "\"Activating X-RAAS in the aircraft\".")
+	    "Your aircraft: (" .. dr.ICAO[0] .. ") number of engines: " ..
+	    dr.num_engines[0] .. "; MTOW: " .. math.floor(dr.mtow[0]) ..
+	    " kg",
+	    RAAS_auto_disable_notify, raas.const.INIT_ERR_MSG_TIMEOUT,
+	    3, "Activating X-RAAS in the aircraft")
 	return
 elseif raas.chk_acf_incompat() then
-	raas.log_init_msg("X-RAAS: auto-disabled, incompatible aircraft " ..
-	    "detected.\n\n" ..
-	    "If you don't know what this means, refer to the user manual " ..
-	    "in X-RAAS_docs" .. DIRSEP .. "manual.pdf, Section 7.1 " ..
-	    "\"Wholly incompatible aircraft\".")
+	raas.log_init_msg("X-RAAS: auto-disabled: incompatible aircraft " ..
+	    "detected.",
+	    RAAS_auto_disable_notify, raas.const.INIT_ERR_MSG_TIMEOUT,
+	    7.1, "Wholly incompatible aircraft")
 	return
 elseif raas.chk_lua_outdated() then
-	raas.log_init_msg("X-RAAS: auto-disabled, your version of " ..
-	    "FlyWithLua is out of date.\n\n" ..
-	    "Refer to the X-RAAS user manual in X-RAAS_docs" .. DIRSEP ..
-	    "manual.pdf, Section 2 \"Installation\".")
+	raas.log_init_msg("X-RAAS: installation error: your version of " ..
+	    "FlyWithLua is out of date.",
+	    true, raas.const.INIT_ERR_MSG_TIMEOUT, 2, "Installation")
 	return
-else
-	logMsg("X-RAAS: ENABLED")
 end
 
 raas.load_msg_table()
-raas.map_apt_dats()
+if not raas.recreate_apt_dat_cache() then
+	return
+end
+
+raas.startup_complete()
 
 do_every_frame('raas.exec()')
 do_every_draw('raas.snd_sched()')
